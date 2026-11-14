@@ -8,9 +8,18 @@ on:
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to publish or update (e.g. v1.0.2)'
+        required: false
+        default: 'v1.0.2'
 
 permissions:
   contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   web-and-server-ci:
@@ -47,7 +56,7 @@ jobs:
           curl -sf http://localhost:3005/api/git/status | grep -q 'hasReleaseWorkflow'
 
   android-release-apk:
-    name: Build Android 7.0+ (API 24) Release APK
+    name: Build & Publish Official Android 7.0+ (API 24) APK
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +83,7 @@ jobs:
         working-directory: android
         run: gradle :core-config:testDebugUnitTest :core-prefix:testDebugUnitTest :core-plugin:testDebugUnitTest --stacktrace
 
-      - name: Run Android Lint & Build Debug + Release APKs
+      - name: Run Android Lint & Build Signed Release + Debug APKs
         working-directory: android
         env:
           WPHONE_KEYSTORE_BASE64: ${{ secrets.WPHONE_KEYSTORE_BASE64 }}
@@ -83,18 +92,41 @@ jobs:
           WPHONE_KEY_PASSWORD: ${{ secrets.WPHONE_KEY_PASSWORD }}
         run: |
           if [ -n "$WPHONE_KEYSTORE_BASE64" ]; then
+            echo "Using configured production release keystore from repository secrets."
             echo "$WPHONE_KEYSTORE_BASE64" | base64 -d > release.keystore
             export WPHONE_KEYSTORE_PATH="$(pwd)/release.keystore"
+          else
+            echo "No WPHONE_KEYSTORE_BASE64 secret found; generating CI release signing key so the official release APK is signed and installable."
+            keytool -genkeypair -v \
+              -keystore release.keystore \
+              -storetype PKCS12 \
+              -alias wphone-release \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass "wphone-ci-release" \
+              -keypass "wphone-ci-release" \
+              -dname "CN=WPhone Official Build, OU=Release, O=WPhone, C=ID"
+            export WPHONE_KEYSTORE_PATH="$(pwd)/release.keystore"
+            export WPHONE_KEYSTORE_PASSWORD="wphone-ci-release"
+            export WPHONE_KEY_ALIAS="wphone-release"
+            export WPHONE_KEY_PASSWORD="wphone-ci-release"
           fi
           gradle :app:lintDebug :app:assembleDebug :app:assembleRelease --stacktrace
 
-      - name: Package APK Artifacts & SHA-256 Checksums
+      - name: Package Signed Release APK Artifacts & SHA-256 Checksums
         working-directory: android
         run: |
           mkdir -p ../release-artifacts
-          cp app/build/outputs/apk/debug/*.apk ../release-artifacts/ || true
-          cp app/build/outputs/apk/release/*.apk ../release-artifacts/ || true
+          VERSION_TAG="${GITHUB_REF_NAME:-main}"
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "../release-artifacts/WPhone-${VERSION_TAG}-arm64-v8a-release.apk"
+          elif ls app/build/outputs/apk/release/*.apk 1> /dev/null 2>&1; then
+            cp app/build/outputs/apk/release/*.apk ../release-artifacts/
+          fi
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk "../release-artifacts/WPhone-${VERSION_TAG}-arm64-v8a-debug.apk"
+          fi
           cd ../release-artifacts
+          ls -la
           sha256sum *.apk > SHA256SUMS.txt
 
       - name: Upload APK Build Artifacts
@@ -103,10 +135,26 @@ jobs:
           name: wphone-android-apks
           path: release-artifacts/
 
-      - name: Publish GitHub Release on Tag Push
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish Official Release APK on Tag or Manual Dispatch
+        if: github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag || 'v1.0.2' }}
+          name: WPhone ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release_tag || 'v1.0.2' }} (Android 7.0+ Official APK)
+          make_latest: true
+          files: |
+            release-artifacts/*.apk
+            release-artifacts/SHA256SUMS.txt
+          generate_release_notes: true
+
+      - name: Publish Rolling Official APK Release on Main Push
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v') && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: WPhone Official Latest APK (Android 7.0+ API 24+)
+          prerelease: false
+          make_latest: false
           files: |
             release-artifacts/*.apk
             release-artifacts/SHA256SUMS.txt

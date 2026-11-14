@@ -13,8 +13,8 @@ android {
         applicationId = "id.wphone"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10000
-        versionName = "1.0.0"
+        versionCode = 10002
+        versionName = "1.0.2"
 
         ndk {
             // Prioritize ARM64-v8a for Wine WoW64 + Box64 execution across Android 7.0+ devices
