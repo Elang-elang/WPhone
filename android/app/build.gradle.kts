@@ -13,8 +13,8 @@ android {
         applicationId = "id.wphone"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10002
-        versionName = "1.0.2"
+        versionCode = 10100
+        versionName = "1.1.0"
 
         ndk {
             // Prioritize ARM64-v8a for Wine WoW64 + Box64 execution across Android 7.0+ devices
@@ -65,6 +65,10 @@ android {
         }
     }
 
+    androidResources {
+        noCompress += listOf("xz", "gz", "tar", "zst", "json", "bin", "so")
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true
@@ -73,6 +77,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions {
         jvmTarget = "17"
@@ -98,5 +103,6 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
 
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.2")
     testImplementation("junit:junit:4.13.2")
 }

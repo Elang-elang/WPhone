@@ -144,11 +144,11 @@ export const AndroidProjectView: React.FC<AndroidProjectViewProps> = ({ lang }) 
             </span>
           </div>
           {[
-            'minSdk = 24 (Android 7.0 Nougat) di seluruh modul app & core-* Gradle',
-            'C++ Audio Bridge memakai OpenSL ES + dlopen("libaaudio.so") dinamis (aman API 24–26)',
-            'Guard Build.SOC_MODEL (API 31+) & legacy external storage (maxSdkVersion="28") + SAF',
-            'Auto-profile VirGL/GLES, BOX64_MMAP32=1 & R8 shrinking untuk RAM 2–4 GB',
-            'JUnit tests siap jalan di CI (core-config, core-prefix, core-plugin)',
+            'minSdk = 24 (Android 7.0 Nougat) di seluruh modul app & core-* Gradle + desugaring API 24',
+            'Bundled ARM64 runtime (>300 MB APK via scripts/build-android-runtime.sh): libproot.so (jniLibs) + Box64 + Wine WoW64 rootfs (.tar.xz)',
+            'Embedded C++17 X11 Display Server (wphone_xserver.cpp) ke ANativeWindow SurfaceView + Direct Touch Mouse',
+            'WineWorkspaceActivity Fullscreen sensorLandscape + tombol Exit mengambang & Keyboard dapat disembunyikan',
+            'C++ Audio Bridge OpenSL ES + dlopen("libaaudio.so") dinamis + Auto-profile VirGL/BOX64_MMAP32 untuk RAM 2–4 GB',
           ].map((item) => (
             <div key={item} className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
               <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />

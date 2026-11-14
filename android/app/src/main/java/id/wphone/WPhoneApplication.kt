@@ -1,6 +1,7 @@
 package id.wphone
 
 import android.app.Application
+import android.view.Surface
 import id.wphone.core.config.DeviceCapabilityAnalyzer
 import id.wphone.core.diagnostics.ProtectedFileManager
 import id.wphone.core.plugin.WrPluginManager
@@ -17,6 +18,13 @@ object WPhoneNativeBridge {
     external fun getRecommendedAudioBackend(preferLightweight: Boolean): String
     external fun getHostPageSizeKb(): Int
     external fun terminateProcessGracefully(pid: Int): Int
+
+    external fun xserverStart(socketPath: String, width: Int, height: Int): Boolean
+    external fun xserverSetSurface(surface: Surface?)
+    external fun xserverStop()
+    external fun xserverInjectPointer(x: Int, y: Int, button: Int, action: Int, modifiers: Int)
+    external fun xserverInjectKey(xKeycode: Int, isDown: Boolean, stateMask: Int)
+    external fun xserverGetClientCount(): Int
 }
 
 class WPhoneApplication : Application() {
@@ -41,6 +49,7 @@ class WPhoneApplication : Application() {
         File(wphoneRoot, "config").mkdirs()
         File(wphoneRoot, "imports").mkdirs()
         File(wphoneRoot, "logs").mkdirs()
+        File(wphoneRoot, "tmp/.X11-unix").mkdirs()
 
         deviceAnalyzer = DeviceCapabilityAnalyzer(this)
         runtimeManager = RuntimeManager(wphoneRoot)

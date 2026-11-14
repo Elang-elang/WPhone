@@ -15,4 +15,7 @@ android/**/build/
 *.keystore
 *.jks
 .aistudio/
+android/app/src/main/assets/runtime/*.tar.xz
+android/app/src/main/assets/runtime/runtime-manifest.json
+android/app/src/main/jniLibs/**/*.so
 

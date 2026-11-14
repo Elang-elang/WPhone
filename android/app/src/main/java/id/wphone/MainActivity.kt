@@ -1,5 +1,6 @@
 package id.wphone
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -15,13 +16,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -33,7 +37,13 @@ import id.wphone.core.input.GamingVirtualPadBar
 import id.wphone.core.plugin.InstalledPluginState
 import id.wphone.core.prefix.DllOverrideMode
 import id.wphone.core.prefix.WineRegistryHive
-import id.wphone.core.runtime.WineWoW64Launcher
+import id.wphone.core.runtime.RuntimeInstallProgress
+import id.wphone.core.runtime.RuntimeInstallStatus
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -61,11 +71,19 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun WPhoneOfficialShell(app: WPhoneApplication, caps: DeviceCapabilities) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
     var appState by remember { mutableStateOf(app.repository.loadState(caps)) }
+    var runtimeStatus by remember { mutableStateOf(app.runtimeManager.inspectStatus(context)) }
     var plugins by remember { mutableStateOf(app.pluginManager.listInstalled()) }
     var selectedTab by remember { mutableIntStateOf(0) }
-    var activeApp by remember { mutableStateOf<WindowsAppConfig?>(null) }
     var statusBanner by remember { mutableStateOf<String?>(null) }
+
+    var isExtracting by remember { mutableStateOf(false) }
+    var installProgress by remember { mutableStateOf<RuntimeInstallProgress?>(null) }
+    var nppDownloading by remember { mutableStateOf(false) }
+    var nppProgressText by remember { mutableStateOf<String?>(null) }
 
     val exePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
@@ -94,18 +112,85 @@ private fun WPhoneOfficialShell(app: WPhoneApplication, caps: DeviceCapabilities
         }
     }
 
+    val runtimeTarPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null && !isExtracting) {
+            isExtracting = true
+            scope.launch {
+                val res = withContext(Dispatchers.IO) {
+                    app.runtimeManager.extractCustomTarXzUri(context, uri) { p ->
+                        scope.launch { installProgress = p }
+                    }
+                }
+                runtimeStatus = app.runtimeManager.inspectStatus(context)
+                isExtracting = false
+                res.onSuccess {
+                    val updated = appState.copy(initialized = true)
+                    app.repository.saveState(updated)
+                    appState = updated
+                    statusBanner = "Runtime extracted cleanly from local archive."
+                }.onFailure { err ->
+                    statusBanner = "Runtime import error: ${err.message}"
+                }
+            }
+        }
+    }
+
+    fun startBundledExtraction(autoFinishSetup: Boolean) {
+        if (isExtracting) return
+        isExtracting = true
+        scope.launch {
+            val res = withContext(Dispatchers.IO) {
+                app.runtimeManager.extractBundledRuntime(context) { p ->
+                    scope.launch { installProgress = p }
+                }
+            }
+            runtimeStatus = app.runtimeManager.inspectStatus(context)
+            isExtracting = false
+            res.onSuccess {
+                if (autoFinishSetup) {
+                    val updated = appState.copy(initialized = true)
+                    app.repository.saveState(updated)
+                    appState = updated
+                }
+                statusBanner = "WPhone Wine WoW64 + Box64 environment installed cleanly."
+            }.onFailure { err ->
+                statusBanner = "Environment install error: ${err.message}"
+            }
+        }
+    }
+
+    fun launchWindowsApp(target: WindowsAppConfig) {
+        runtimeStatus = app.runtimeManager.inspectStatus(context)
+        if (!runtimeStatus.isInstalled) {
+            statusBanner = "Runtime belum terpasang/ekstrak. Pasang environment terlebih dahulu."
+            return
+        }
+        val intent = Intent(context, WineWorkspaceActivity::class.java).apply {
+            putExtra(WineWorkspaceActivity.EXTRA_APP_JSON, Json.encodeToString(target))
+        }
+        context.startActivity(intent)
+    }
+
     if (!appState.initialized) {
         SetupWizardScreen(
             caps = caps,
+            runtimeStatus = runtimeStatus,
+            isExtracting = isExtracting,
+            progress = installProgress,
             selectedProfile = appState.selectedProfile,
             onSelectProfile = { profile ->
                 appState = appState.copy(selectedProfile = profile)
             },
-            onComplete = {
-                val updated = appState.copy(initialized = true)
-                app.repository.saveState(updated)
-                appState = updated
-            }
+            onInstallBundled = {
+                if (runtimeStatus.hasBundledAsset && !runtimeStatus.isInstalled) {
+                    startBundledExtraction(autoFinishSetup = true)
+                } else {
+                    val updated = appState.copy(initialized = true)
+                    app.repository.saveState(updated)
+                    appState = updated
+                }
+            },
+            onPickLocalArchive = { runtimeTarPicker.launch(arrayOf("*/*")) }
         )
         return
     }
@@ -176,9 +261,39 @@ private fun WPhoneOfficialShell(app: WPhoneApplication, caps: DeviceCapabilities
             when (selectedTab) {
                 0 -> LibraryScreen(
                     apps = appState.apps,
-                    caps = caps,
                     app = app,
-                    onLaunch = { activeApp = it }
+                    runtimeStatus = runtimeStatus,
+                    isExtracting = isExtracting,
+                    progress = installProgress,
+                    nppDownloading = nppDownloading,
+                    nppProgressText = nppProgressText,
+                    onExtractRuntime = { startBundledExtraction(autoFinishSetup = false) },
+                    onDownloadNpp = {
+                        if (!nppDownloading) {
+                            nppDownloading = true
+                            scope.launch {
+                                var lastReportedMb = -1L
+                                val res = withContext(Dispatchers.IO) {
+                                    app.runtimeManager.downloadNotepadPlusPlusPortable(app.prefixManager.prefixesDir()) { got, total ->
+                                        val mbGot = got / (1024 * 1024)
+                                        if (mbGot != lastReportedMb) {
+                                            lastReportedMb = mbGot
+                                            val mbTot = if (total > 0) "${total / (1024 * 1024)} MB" else "?"
+                                            scope.launch { nppProgressText = "Downloading $mbGot MB / $mbTot" }
+                                        }
+                                    }
+                                }
+                                nppDownloading = false
+                                nppProgressText = null
+                                res.onSuccess {
+                                    statusBanner = "Notepad++ Portable installed cleanly into pfx-notepadpp."
+                                }.onFailure { err ->
+                                    statusBanner = "Notepad++ download failed: ${err.message}"
+                                }
+                            }
+                        }
+                    },
+                    onLaunch = { launchWindowsApp(it) }
                 )
                 1 -> RegistryEditorScreen(
                     apps = appState.apps,
@@ -196,27 +311,29 @@ private fun WPhoneOfficialShell(app: WPhoneApplication, caps: DeviceCapabilities
                     }
                 )
                 3 -> KeyboardTestScreen()
-                4 -> AdminDiagnosticsScreen(app = app, caps = caps, onBanner = { statusBanner = it })
+                4 -> AdminDiagnosticsScreen(
+                    app = app,
+                    caps = caps,
+                    runtimeStatus = runtimeStatus,
+                    onReExtract = { startBundledExtraction(autoFinishSetup = false) },
+                    onImportTar = { runtimeTarPicker.launch(arrayOf("*/*")) },
+                    onBanner = { statusBanner = it }
+                )
             }
         }
-    }
-
-    activeApp?.let { running ->
-        RuntimeLauncherDialog(
-            appConfig = running,
-            app = app,
-            caps = caps,
-            onDismiss = { activeApp = null }
-        )
     }
 }
 
 @Composable
 private fun SetupWizardScreen(
     caps: DeviceCapabilities,
+    runtimeStatus: RuntimeInstallStatus,
+    isExtracting: Boolean,
+    progress: RuntimeInstallProgress?,
     selectedProfile: EasyProfile,
     onSelectProfile: (EasyProfile) -> Unit,
-    onComplete: () -> Unit
+    onInstallBundled: () -> Unit,
+    onPickLocalArchive: () -> Unit
 ) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -230,6 +347,11 @@ private fun SetupWizardScreen(
                 Text("Device: ${caps.socModel}")
                 Text("Android API ${caps.androidSdk} · ${caps.primaryAbi} · RAM ${caps.totalRamMb} MB")
                 Text("Graphics: ${caps.recommendedGraphics.name} · Audio: ${caps.recommendedAudio.name}")
+                Text(
+                    "Bundled Asset: ${if (runtimeStatus.hasBundledAsset) "Available in APK" else "Not bundled"} · PRoot: ${runtimeStatus.hasProotBinary} · Wine: ${runtimeStatus.hasWineBinary} · Box64: ${runtimeStatus.hasBox64Binary}",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontFamily = FontFamily.Monospace
+                )
                 if (caps.memoryBudget.isSubAndroid10 || caps.memoryBudget.isLowRamMode) {
                     Text(
                         "Sub-Android 10 Lightweight Mode Active (Cap: ${caps.memoryBudget.maxVirtualResolution}, Container ${caps.memoryBudget.estimatedContainerCapMb} MB)",
@@ -239,6 +361,25 @@ private fun SetupWizardScreen(
                 }
                 caps.compatibilityWarnings.forEach { warn ->
                     Text(warn, color = Color(0xFFD97706), style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        if (isExtracting && progress != null) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(progress.phase, style = MaterialTheme.typography.titleSmall)
+                    if (progress.totalBytes > 0) {
+                        val ratio = (progress.bytesProcessed.toFloat() / progress.totalBytes.toFloat()).coerceIn(0f, 1f)
+                        LinearProgressIndicator(progress = { ratio }, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    Text(
+                        "${progress.bytesProcessed / (1024 * 1024)} MB · ${progress.currentFile}",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
             }
         }
@@ -268,8 +409,27 @@ private fun SetupWizardScreen(
             }
         }
 
-        Button(onClick = onComplete, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-            Text("Initialize WPhone System")
+        Button(
+            onClick = onInstallBundled,
+            enabled = !isExtracting,
+            modifier = Modifier.fillMaxWidth().height(48.dp)
+        ) {
+            Text(
+                when {
+                    isExtracting -> "Extracting Runtime Environment..."
+                    runtimeStatus.isInstalled -> "Open WPhone Library"
+                    runtimeStatus.hasBundledAsset -> "Install & Extract Bundled Environment"
+                    else -> "Continue to Library (Import Runtime Later)"
+                }
+            )
+        }
+
+        OutlinedButton(
+            onClick = onPickLocalArchive,
+            enabled = !isExtracting,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Import Custom Runtime (.tar.xz)")
         }
     }
 }
@@ -277,19 +437,50 @@ private fun SetupWizardScreen(
 @Composable
 private fun LibraryScreen(
     apps: List<WindowsAppConfig>,
-    caps: DeviceCapabilities,
     app: WPhoneApplication,
+    runtimeStatus: RuntimeInstallStatus,
+    isExtracting: Boolean,
+    progress: RuntimeInstallProgress?,
+    nppDownloading: Boolean,
+    nppProgressText: String?,
+    onExtractRuntime: () -> Unit,
+    onDownloadNpp: () -> Unit,
     onLaunch: (WindowsAppConfig) -> Unit
 ) {
+    val rootfsDir = app.runtimeManager.rootfsDir()
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(stringResource(R.string.library_title), style = MaterialTheme.typography.titleLarge)
         Text(
-            "Tap + to import real .exe / .msi via Storage Access Framework (API 24+)",
+            "Launches directly into Fullscreen Landscape X11 Workspace with Direct Touch Mouse & Hideable Keyboard.",
             style = MaterialTheme.typography.bodySmall
         )
+
+        if (!runtimeStatus.isInstalled) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+            ) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "Environment Missing: PRoot=${runtimeStatus.hasProotBinary}, Wine=${runtimeStatus.hasWineBinary}, Box64=${runtimeStatus.hasBox64Binary}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (isExtracting && progress != null) {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text("${progress.bytesProcessed / (1024 * 1024)} MB · ${progress.currentFile}", style = MaterialTheme.typography.labelSmall)
+                    } else if (runtimeStatus.hasBundledAsset) {
+                        Button(onClick = onExtractRuntime) {
+                            Text("Extract Bundled Environment Now")
+                        }
+                    }
+                }
+            }
+        }
+
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(apps, key = { it.id }) { item ->
                 val hive = remember(item.prefixId) { app.repository.readPrefixHive(item.prefixId) }
+                val exeReady = app.repository.isAppExecutableReady(item, rootfsDir)
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(item.name, style = MaterialTheme.typography.titleMedium)
@@ -298,12 +489,31 @@ private fun LibraryScreen(
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            "Prefix: ${item.prefixId} (${hive.winVersion}) · Overrides: ${hive.dllOverrides.size}",
+                            "Prefix: ${item.prefixId} (${hive.winVersion}) · Target: ${item.executablePath}",
                             style = MaterialTheme.typography.labelSmall,
                             fontFamily = FontFamily.Monospace
                         )
-                        Button(onClick = { onLaunch(item) }) {
-                            Text(stringResource(R.string.launch_app))
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (item.id == "notepadpp" && !exeReady) {
+                                Button(
+                                    onClick = onDownloadNpp,
+                                    enabled = !nppDownloading
+                                ) {
+                                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(nppProgressText ?: "Download Notepad++ Portable")
+                                }
+                            } else {
+                                Button(
+                                    onClick = { onLaunch(item) },
+                                    enabled = runtimeStatus.isInstalled && (exeReady || item.id == "wine-notepad")
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(stringResource(R.string.launch_app))
+                                }
+                            }
                         }
                     }
                 }
@@ -445,6 +655,9 @@ private fun KeyboardTestScreen() {
 private fun AdminDiagnosticsScreen(
     app: WPhoneApplication,
     caps: DeviceCapabilities,
+    runtimeStatus: RuntimeInstallStatus,
+    onReExtract: () -> Unit,
+    onImportTar: () -> Unit,
     onBanner: (String) -> Unit
 ) {
     val audioBridge = remember {
@@ -452,15 +665,29 @@ private fun AdminDiagnosticsScreen(
     }
     val pageKb = remember { WPhoneNativeBridge.getHostPageSizeKb() }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         Text(stringResource(R.string.admin_title), style = MaterialTheme.typography.titleLarge)
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("JNI ABI: ${WPhoneNativeBridge.getNativeAbiInfo()}", style = MaterialTheme.typography.bodySmall)
                 Text("Active Audio Sink: $audioBridge · Page Size: ${pageKb} KB", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "Runtime Installed: ${runtimeStatus.isInstalled} (PRoot=${runtimeStatus.hasProotBinary}, Wine=${runtimeStatus.hasWineBinary}, Box64=${runtimeStatus.hasBox64Binary})",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(runtimeStatus.bundleSummary, style = MaterialTheme.typography.labelSmall, fontFamily = FontFamily.Monospace)
                 Text("Workspace Root: ${app.wphoneRoot.absolutePath}", style = MaterialTheme.typography.bodySmall)
                 Text(stringResource(R.string.warning_prefix_not_sandbox), color = Color(0xFFD97706), style = MaterialTheme.typography.bodySmall)
             }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (runtimeStatus.hasBundledAsset) {
+                Button(onClick = onReExtract) { Text("Re-Extract Runtime") }
+            }
+            OutlinedButton(onClick = onImportTar) { Text("Import .tar.xz") }
         }
         Button(onClick = {
             val res = app.fileGuard.deleteSafely(File(app.wphoneRoot, "runtime"))
@@ -469,40 +696,4 @@ private fun AdminDiagnosticsScreen(
             Text("Verify Protected Runtime Guard")
         }
     }
-}
-
-@Composable
-private fun RuntimeLauncherDialog(
-    appConfig: WindowsAppConfig,
-    app: WPhoneApplication,
-    caps: DeviceCapabilities,
-    onDismiss: () -> Unit
-) {
-    val launcher = remember {
-        WineWoW64Launcher(app.runtimeManager.runtimeDir(), app.prefixManager.prefixesDir())
-    }
-    val hive = remember(appConfig.prefixId) { app.repository.readPrefixHive(appConfig.prefixId) }
-    val env = remember(appConfig, hive) {
-        launcher.buildEnvironment(appConfig, caps, hive.toWineDllOverridesEnv())
-    }
-    val cmd = remember(appConfig) { launcher.buildCommandLine(appConfig).joinToString(" ") }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(appConfig.name) },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Resolved Wine WoW64 + Box64 Environment", style = MaterialTheme.typography.labelLarge)
-                Text(cmd, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-                env.entries.forEach { (k, v) ->
-                    Text("$k=$v", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.terminate_safe))
-            }
-        }
-    )
 }

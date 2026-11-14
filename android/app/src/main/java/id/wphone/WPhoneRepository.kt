@@ -36,7 +36,14 @@ class WPhoneRepository(
     fun loadState(caps: DeviceCapabilities): PersistedAppState {
         if (stateFile.exists()) {
             runCatching {
-                return json.decodeFromString<PersistedAppState>(stateFile.readText())
+                val loaded = json.decodeFromString<PersistedAppState>(stateFile.readText())
+                val hasBuiltInNotepad = loaded.apps.any { it.id == "wine-notepad" }
+                if (!hasBuiltInNotepad) {
+                    val upgraded = loaded.copy(apps = listOf(builtInWineNotepad(caps)) + loaded.apps)
+                    saveState(upgraded)
+                    return upgraded
+                }
+                return loaded
             }
         }
         val initial = PersistedAppState(
@@ -51,6 +58,22 @@ class WPhoneRepository(
     fun saveState(state: PersistedAppState) {
         stateFile.parentFile?.mkdirs()
         stateFile.writeText(json.encodeToString(state))
+    }
+
+    fun isAppExecutableReady(app: WindowsAppConfig, wineRootfsDir: File): Boolean {
+        if (app.id == "wine-notepad") {
+            return File(wineRootfsDir, "opt/wine/bin/wine").exists() ||
+                File(wineRootfsDir, "opt/wine/bin/wine64").exists()
+        }
+        val cleanRel = app.executablePath
+            .removePrefix("C:\\")
+            .removePrefix("c:\\")
+            .replace('\\', '/')
+        if (app.executablePath.startsWith("Z:", ignoreCase = true)) {
+            return File(app.executablePath.substring(2)).exists()
+        }
+        val inPrefix = File(File(prefixManager.prefixesDir(), app.prefixId), "drive_c/$cleanRel")
+        return inPrefix.exists()
     }
 
     fun copyUriToImports(uri: Uri): Pair<File, String> {
@@ -116,30 +139,35 @@ class WPhoneRepository(
         return uri.lastPathSegment
     }
 
+    private fun builtInWineNotepad(caps: DeviceCapabilities): WindowsAppConfig {
+        prefixManager.ensurePrefix("pfx-notepad", "Wine Notepad", "win10", caps.memoryBudget.isLowRamMode)
+        return WindowsAppConfig(
+            id = "wine-notepad",
+            name = "Wine Notepad (Built-in)",
+            category = "Utilities",
+            executablePath = "C:\\windows\\system32\\notepad.exe",
+            workingDirectory = "C:\\windows\\system32",
+            arch = WinArch.X64,
+            prefixId = "pfx-notepad",
+            graphicsBackend = caps.recommendedGraphics,
+            audioBackend = caps.recommendedAudio,
+            resolution = caps.memoryBudget.maxVirtualResolution,
+            keyboardMode = "desktop"
+        )
+    }
+
     private fun defaultCatalogApps(caps: DeviceCapabilities): List<WindowsAppConfig> {
-        prefixManager.ensurePrefix("pfx-notepadpp", "Notepad++", "win10", caps.memoryBudget.isLowRamMode)
-        prefixManager.ensurePrefix("pfx-7zip", "7-Zip", "win10", caps.memoryBudget.isLowRamMode)
+        prefixManager.ensurePrefix("pfx-notepadpp", "Notepad++ Portable", "win10", caps.memoryBudget.isLowRamMode)
         return listOf(
+            builtInWineNotepad(caps),
             WindowsAppConfig(
                 id = "notepadpp",
-                name = "Notepad++",
+                name = "Notepad++ Portable (x64)",
                 category = "Utilities",
                 executablePath = "C:\\Program Files\\Notepad++\\notepad++.exe",
                 workingDirectory = "C:\\Program Files\\Notepad++",
                 arch = WinArch.X64,
                 prefixId = "pfx-notepadpp",
-                graphicsBackend = caps.recommendedGraphics,
-                audioBackend = caps.recommendedAudio,
-                resolution = caps.memoryBudget.maxVirtualResolution
-            ),
-            WindowsAppConfig(
-                id = "7zip",
-                name = "7-Zip File Manager",
-                category = "Utilities",
-                executablePath = "C:\\Program Files\\7-Zip\\7zFM.exe",
-                workingDirectory = "C:\\Program Files\\7-Zip",
-                arch = WinArch.X64,
-                prefixId = "pfx-7zip",
                 graphicsBackend = caps.recommendedGraphics,
                 audioBackend = caps.recommendedAudio,
                 resolution = caps.memoryBudget.maxVirtualResolution,
