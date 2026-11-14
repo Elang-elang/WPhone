@@ -25,7 +25,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --legacy-peer-deps
 
       - name: TypeScript typecheck
         run: npm run lint
@@ -58,12 +58,12 @@ jobs:
           java-version: '17'
 
       - name: Setup Android SDK & NDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;27.1.12297006 cmake;3.22.1'
 
-      - name: Install Android NDK 27 & CMake 3.22
-        run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+      - name: Ensure Android SDK Licenses Accepted
+        run: yes | sdkmanager --licenses > /dev/null || true
 
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
