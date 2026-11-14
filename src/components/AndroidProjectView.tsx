@@ -1,6 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Download, FileCode2, FolderGit2 } from 'lucide-react';
-import { ResolvedLanguage } from '../types/wphone';
+import {
+  CheckCircle2,
+  Download,
+  FileCode2,
+  FolderGit2,
+  GitBranch,
+  GitCommitHorizontal,
+  ShieldCheck,
+  Tag,
+} from 'lucide-react';
+import { GitRepoStatus, ResolvedLanguage } from '../types/wphone';
 
 interface AndroidProjectViewProps {
   lang: ResolvedLanguage;
@@ -15,16 +24,20 @@ export const AndroidProjectView: React.FC<AndroidProjectViewProps> = ({ lang }) 
   const [files, setFiles] = useState<AndroidFileItem[]>([]);
   const [selectedPath, setSelectedPath] = useState<string>('');
   const [content, setContent] = useState<string>('');
+  const [gitStatus, setGitStatus] = useState<GitRepoStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/android/tree')
-      .then((r) => r.json())
-      .then((data: { files: AndroidFileItem[] }) => {
-        setFiles(data.files || []);
-        if (data.files && data.files.length > 0) {
+    Promise.all([
+      fetch('/api/android/tree').then((r) => r.json()),
+      fetch('/api/git/status').then((r) => r.json()),
+    ])
+      .then(([treeData, gitData]: [{ files: AndroidFileItem[] }, GitRepoStatus]) => {
+        setFiles(treeData.files || []);
+        setGitStatus(gitData);
+        if (treeData.files && treeData.files.length > 0) {
           const preferred =
-            data.files.find((f) => f.path.endsWith('MainActivity.kt')) || data.files[0];
+            treeData.files.find((f) => f.path.endsWith('MainActivity.kt')) || treeData.files[0];
           setSelectedPath(preferred.path);
         }
       })
@@ -44,13 +57,13 @@ export const AndroidProjectView: React.FC<AndroidProjectViewProps> = ({ lang }) 
         <div>
           <h1 className="font-display text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white">
             {lang === 'id'
-              ? 'Proyek Native Android Studio (Multi-Modul)'
-              : 'Native Android Studio Project (Multi-Module)'}
+              ? 'Rilis Resmi Android 7.0+ & Pipeline GitHub'
+              : 'WPhone Official Android 7.0+ Release & GitHub Pipeline'}
           </h1>
           <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
             {lang === 'id'
-              ? 'Kotlin · Jetpack Compose · C++/JNI NDK · CMake · AAudio Bridge · PE32/PE32+ Inspector'
-              : 'Kotlin · Jetpack Compose · C++/JNI NDK · CMake · AAudio Bridge · PE32/PE32+ Inspector'}
+              ? 'minSdk 24 (Android 7.0–15) · OpenSL ES + Dynamic AAudio · R8 Minified Release APK · GitHub Actions CI'
+              : 'minSdk 24 (Android 7.0–15) · OpenSL ES + Dynamic AAudio · R8 Minified Release APK · GitHub Actions CI'}
           </p>
         </div>
 
@@ -65,6 +78,84 @@ export const AndroidProjectView: React.FC<AndroidProjectViewProps> = ({ lang }) 
               : 'Download Complete Android Project (.zip)'}
           </span>
         </a>
+      </div>
+
+      {/* Git & Release Readiness Overview */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3 text-xs">
+          <div className="font-display text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <GitBranch className="w-4 h-4 text-[#0078D4]" />
+            <span>
+              {lang === 'id' ? 'Status Repositori `.git` & GitHub Actions' : '`.git` Repository & GitHub Actions Status'}
+            </span>
+          </div>
+
+          {gitStatus ? (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 font-mono text-[11px]">
+                <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70">
+                  <div className="text-slate-400">Branch</div>
+                  <div className="font-semibold text-slate-900 dark:text-white truncate">{gitStatus.branch}</div>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70">
+                  <div className="text-slate-400">HEAD Commit</div>
+                  <div className="font-semibold text-slate-900 dark:text-white flex items-center gap-1">
+                    <GitCommitHorizontal className="w-3 h-3" />
+                    <span>{gitStatus.shortCommit || '—'}</span>
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70">
+                  <div className="text-slate-400">Release Tag</div>
+                  <div className="font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <Tag className="w-3 h-3" />
+                    <span>{gitStatus.latestTag || 'none'}</span>
+                  </div>
+                </div>
+                <div className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70">
+                  <div className="text-slate-400">CI Workflow</div>
+                  <div className="font-semibold text-slate-900 dark:text-white">
+                    {gitStatus.hasReleaseWorkflow ? 'Ready (.yml)' : 'Missing'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-2.5 rounded-lg bg-slate-950 text-slate-200 font-mono text-[11px] space-y-1">
+                <div className="text-slate-400">
+                  {lang === 'id'
+                    ? '# Push ke GitHub untuk memicu build APK release otomatis:'
+                    : '# Push to GitHub to trigger automated APK Release build:'}
+                </div>
+                <div>git remote add origin &lt;YOUR_GITHUB_REPO_URL&gt;</div>
+                <div>git push -u origin {gitStatus.branch} --tags</div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-slate-500">Reading .git metadata...</div>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-2.5 text-xs">
+          <div className="font-display text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+            <span>
+              {lang === 'id'
+                ? 'Checklist Keringanan Android < 10 (API 24+)'
+                : 'Sub-Android 10 (API 24+) Release Checklist'}
+            </span>
+          </div>
+          {[
+            'minSdk = 24 (Android 7.0 Nougat) di seluruh modul app & core-* Gradle',
+            'C++ Audio Bridge memakai OpenSL ES + dlopen("libaaudio.so") dinamis (aman API 24–26)',
+            'Guard Build.SOC_MODEL (API 31+) & legacy external storage (maxSdkVersion="28") + SAF',
+            'Auto-profile VirGL/GLES, BOX64_MMAP32=1 & R8 shrinking untuk RAM 2–4 GB',
+            'JUnit tests siap jalan di CI (core-config, core-prefix, core-plugin)',
+          ].map((item) => (
+            <div key={item} className="flex items-start gap-2 text-slate-700 dark:text-slate-300">
+              <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {loading ? (

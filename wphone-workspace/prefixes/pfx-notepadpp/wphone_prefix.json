@@ -1,9 +1,0 @@
-{
-  "prefixId": "pfx-notepadpp",
-  "appName": "Notepad++ 8.7",
-  "winVersion": "win10",
-  "installedDependencies": [
-    "vcrun2022"
-  ],
-  "updatedAt": "2026-11-14T11:49:31.570Z"
-}

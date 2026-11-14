@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "id.wphone.core.runtime"
     compileSdk = 35
-    defaultConfig { minSdk = 28 }
+    defaultConfig { minSdk = 24 }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -17,4 +17,5 @@ android {
 dependencies {
     implementation(project(":core-config"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    testImplementation("junit:junit:4.13.2")
 }

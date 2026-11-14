@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "id.wphone.core.input"
     compileSdk = 35
-    defaultConfig { minSdk = 28 }
+    defaultConfig { minSdk = 24 }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

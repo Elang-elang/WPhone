@@ -1,5 +1,7 @@
 package id.wphone.core.runtime
 
+import id.wphone.core.config.AudioBackend
+import id.wphone.core.config.DeviceCapabilities
 import id.wphone.core.config.GraphicsBackend
 import id.wphone.core.config.WindowsAppConfig
 import java.io.File
@@ -8,18 +10,10 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/**
- * Orchestrates resumable SHA-256 verified runtime component downloads and builds
- * Wine WoW64 + Box64 execution environments for isolated per-app prefixes.
- */
 class RuntimeManager(private val wphoneRoot: File) {
 
     fun runtimeDir(): File = File(wphoneRoot, "runtime").apply { mkdirs() }
 
-    /**
-     * Supports HTTP Range resume if an initial download was interrupted,
-     * followed by SHA-256 verification before extracting into /WPhone/runtime.
-     */
     fun downloadResumable(
         urlString: String,
         destFile: File,
@@ -74,31 +68,53 @@ class WineWoW64Launcher(
     private val runtimeDir: File,
     private val prefixesDir: File
 ) {
-    fun buildEnvironment(app: WindowsAppConfig): Map<String, String> {
+    fun buildEnvironment(
+        app: WindowsAppConfig,
+        caps: DeviceCapabilities? = null,
+        registryOverrides: String = ""
+    ): Map<String, String> {
+        val budget = caps?.memoryBudget
+        val useLegacyBudget = budget?.isSubAndroid10 == true || budget?.isLowRamMode == true
+
         val env = linkedMapOf(
             "WINEPREFIX" to File(prefixesDir, app.prefixId).absolutePath,
-            "WINEESYNC" to "1",
+            "WINEESYNC" to if (budget?.enableEsync == false) "0" else "1",
             "WINEDEBUG" to "-all",
             "BOX64_LOG" to "0",
-            "BOX64_DYNAREC_STRONGMEM" to "1",
+            "BOX64_DYNAREC_BIGBLOCK" to (budget?.box64BigBlock?.toString() ?: "1"),
+            "BOX64_DYNAREC_STRONGMEM" to if (useLegacyBudget) "0" else "1",
             "PULSE_SERVER" to "unix:${runtimeDir.absolutePath}/pulse.sock",
+            "PULSE_LATENCY_MSEC" to if (app.audioBackend == AudioBackend.PULSE_OPENSL_ES) "60" else "30",
             "DISPLAY" to ":0"
         )
 
+        if (budget?.box64Mmap32 == true) {
+            env["BOX64_MMAP32"] = "1"
+        }
+
+        val baseOverrides = mutableListOf<String>()
         when (app.graphicsBackend) {
             GraphicsBackend.TURNIP_DXVK -> {
                 env["VK_ICD_FILENAMES"] = "${runtimeDir.absolutePath}/turnip_icd.json"
-                env["WINEDLLOVERRIDES"] = "d3d9,d3d10core,d3d11,dxgi=n,b"
+                baseOverrides += "d3d9,d3d10core,d3d11,dxgi=n,b"
             }
             GraphicsBackend.SYSTEM_VULKAN_DXVK -> {
-                env["WINEDLLOVERRIDES"] = "d3d9,d3d10core,d3d11,dxgi=n,b"
+                baseOverrides += "d3d9,d3d10core,d3d11,dxgi=n,b"
             }
             GraphicsBackend.VKD3D_PROTON -> {
-                env["WINEDLLOVERRIDES"] = "d3d12,d3d12core=n,b"
+                baseOverrides += "d3d12,d3d12core=n,b"
             }
             GraphicsBackend.WINED3D_VIRGL -> {
                 env["LIBGL_ALWAYS_SOFTWARE"] = "0"
+                env["MESA_GL_VERSION_OVERRIDE"] = "3.3"
             }
+        }
+
+        if (registryOverrides.isNotBlank()) {
+            baseOverrides += registryOverrides
+        }
+        if (baseOverrides.isNotEmpty()) {
+            env["WINEDLLOVERRIDES"] = baseOverrides.joinToString(";")
         }
 
         env.putAll(app.envVars)

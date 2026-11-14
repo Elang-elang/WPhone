@@ -2,7 +2,7 @@ export type LanguagePreference = 'auto' | 'id' | 'en';
 export type ResolvedLanguage = 'id' | 'en';
 export type ThemePreference = 'auto' | 'light' | 'dark';
 export type ResolvedTheme = 'light' | 'dark';
-export type WorkspaceSection = 'prototype' | 'docs' | 'compatibility' | 'android';
+export type WorkspaceSection = 'console' | 'docs' | 'compatibility' | 'android';
 export type DeviceViewportMode = 'mobile' | 'expanded';
 
 export type SetupMode = 'easy' | 'advanced';
@@ -13,6 +13,8 @@ export type WinArch = 'x64' | 'x86';
 export type GraphicsBackend = 'turnip-dxvk' | 'system-vulkan-dxvk' | 'vkd3d-proton' | 'wined3d-virgl';
 export type AudioDriver = 'pulse-aaudio' | 'pulse-opensl' | 'alsa-null';
 export type KeyboardMode = 'desktop' | 'gaming';
+
+export type DllOverrideMode = 'native,builtin' | 'builtin,native' | 'native' | 'builtin' | 'disabled';
 
 export type VerificationStatus =
   | 'verified'
@@ -34,8 +36,12 @@ export interface DeviceHardwareProfile {
   vulkanVersion: string;
   turnipSupported: boolean;
   androidVersion: number;
+  androidApiLevel: number;
+  isSubAndroid10: boolean;
+  lowRamMode: boolean;
   recommendedEasyProfile: EasyProfile;
   recommendedGraphics: GraphicsBackend;
+  recommendedAudio: AudioDriver;
   notesId: string;
   notesEn: string;
 }
@@ -110,6 +116,37 @@ export interface WinePrefixRecord {
   createdAt: string;
 }
 
+export interface WineRegistryState {
+  prefixId: string;
+  winVersion: 'win10' | 'win11' | 'win7';
+  audioDriver: 'pulse' | 'alsa' | 'null';
+  directDrawRenderer: 'opengl' | 'gdi' | 'vulkan';
+  offscreenRenderingMode: 'fbo' | 'backbuffer';
+  videoMemorySize: number;
+  csmtEnabled: boolean;
+  dllOverrides: Record<string, DllOverrideMode>;
+  wineDllOverridesEnv: string;
+  rawUserReg: string;
+}
+
+export interface PreflightCheckItem {
+  id: string;
+  label: string;
+  status: 'pass' | 'warn' | 'fail';
+  detail: string;
+}
+
+export interface PreflightReport {
+  appId: string;
+  appName: string;
+  overallStatus: 'ready' | 'degraded' | 'blocked';
+  estimatedRamMb: number;
+  commandLine: string;
+  resolvedEnv: Record<string, string>;
+  missingDependencies: string[];
+  checks: PreflightCheckItem[];
+}
+
 export interface VirtualFsNode {
   id: string;
   name: string;
@@ -158,6 +195,30 @@ export interface InstalledPlugin {
   installedAt: string;
   readme?: string;
   accentColor?: string;
+  scriptPreview?: string;
+}
+
+export interface PluginSandboxExecutionResult {
+  pluginId: string;
+  ok: boolean;
+  durationMs: number;
+  appliedAccentColor?: string;
+  suggestedEnv?: Record<string, string>;
+  registeredPresetName?: string;
+  logs: Array<{ level: 'info' | 'warn' | 'denied' | 'error'; message: string }>;
+  error?: string;
+}
+
+export interface GitRepoStatus {
+  initialized: boolean;
+  branch: string;
+  headCommit: string;
+  shortCommit: string;
+  latestTag: string | null;
+  commitCount: number;
+  dirtyFiles: number;
+  remotes: Array<{ name: string; url: string }>;
+  hasReleaseWorkflow: boolean;
 }
 
 export interface ManagedProcess {

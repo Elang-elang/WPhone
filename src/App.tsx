@@ -19,6 +19,7 @@ import {
   KeyboardPresetConfig,
   LanguagePreference,
   ManagedProcess,
+  PluginSandboxExecutionResult,
   ResolvedLanguage,
   ResolvedTheme,
   SetupMode,
@@ -84,7 +85,7 @@ export default function App() {
   });
 
   const [viewportMode, setViewportMode] = useState<DeviceViewportMode>('expanded');
-  const [activeSection, setActiveSection] = useState<WorkspaceSection>('prototype');
+  const [activeSection, setActiveSection] = useState<WorkspaceSection>('console');
   const [protoView, setProtoView] = useState<'wizard' | 'library' | 'admin' | 'keyboard'>(() =>
     systemState.initialized ? 'library' : 'wizard'
   );
@@ -396,12 +397,15 @@ export default function App() {
     }));
   };
 
-  const handleTogglePrefixDep = (prefixId: string, depId: string) => {
+  const handleTogglePrefixDep = async (prefixId: string, depId: string) => {
+    const existingPfx = systemState.prefixes.find((p) => p.id === prefixId);
+    const exists = existingPfx?.installedDeps.includes(depId) ?? false;
+    const action = exists ? 'remove' : 'install';
+
     setSystemState((prev) => ({
       ...prev,
       prefixes: prev.prefixes.map((p) => {
         if (p.id !== prefixId) return p;
-        const exists = p.installedDeps.includes(depId);
         return {
           ...p,
           installedDeps: exists
@@ -415,12 +419,22 @@ export default function App() {
           timestamp: getTimeString(),
           module: 'PrefixMgr',
           level: 'INFO',
-          messageId: `Dependensi ${depId} diperbarui pada prefix ${prefixId}.`,
-          messageEn: `Updated dependency ${depId} inside prefix ${prefixId}.`,
+          messageId: `Dependensi ${depId} (${action}) disinkronkan ke drive_c & user.reg pada prefix ${prefixId}.`,
+          messageEn: `Dependency ${depId} (${action}) synced to drive_c & user.reg inside prefix ${prefixId}.`,
         },
         ...prev.logs,
       ],
     }));
+
+    try {
+      await fetch(`/api/prefixes/${encodeURIComponent(prefixId)}/deps`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ depId, action }),
+      });
+    } catch {
+      // state sync fallback handles persistence
+    }
   };
 
   const handleInstallPlugin = (plugin: InstalledPlugin) => {
@@ -453,6 +467,47 @@ export default function App() {
       ...prev,
       plugins: prev.plugins.filter((p) => p.id !== pluginId),
     }));
+  };
+
+  const handlePluginSandboxEffect = (
+    plugin: InstalledPlugin,
+    result: PluginSandboxExecutionResult
+  ) => {
+    setSystemState((prev) => {
+      let nextPlugins = prev.plugins;
+      if (result.appliedAccentColor) {
+        nextPlugins = prev.plugins.map((p) =>
+          p.id === plugin.id
+            ? { ...p, accentColor: result.appliedAccentColor, enabled: true }
+            : p
+        );
+      }
+      const nextApps =
+        result.suggestedEnv && Object.keys(result.suggestedEnv).length > 0
+          ? prev.apps.map((a) => ({
+              ...a,
+              envVars: { ...a.envVars, ...result.suggestedEnv },
+            }))
+          : prev.apps;
+
+      const summary = result.logs.map((l) => `[${l.level}] ${l.message}`).join(' · ');
+      return {
+        ...prev,
+        plugins: nextPlugins,
+        apps: nextApps,
+        logs: [
+          {
+            id: `log-${Date.now()}`,
+            timestamp: getTimeString(),
+            module: 'PluginHost',
+            level: result.ok ? 'INFO' : 'WARN',
+            messageId: `Sandbox ${plugin.name} (${result.durationMs}ms): ${summary || 'Selesai'}`,
+            messageEn: `Sandbox ${plugin.name} (${result.durationMs}ms): ${summary || 'Done'}`,
+          },
+          ...prev.logs,
+        ],
+      };
+    });
   };
 
   const handleSaveKeyboardPreset = (preset: KeyboardPresetConfig) => {
@@ -517,7 +572,7 @@ export default function App() {
       setSystemState(createInitialSystemState());
     }
     setProtoView('wizard');
-    setActiveSection('prototype');
+    setActiveSection('console');
   };
 
   const device = useMemo(
@@ -528,12 +583,12 @@ export default function App() {
   );
 
   const primaryActionLabel =
-    activeSection === 'prototype' && protoView === 'library'
+    activeSection === 'console' && protoView === 'library'
       ? t.cta.runWizard
       : t.cta.openLibrary;
 
   const handlePrimaryAction = () => {
-    setActiveSection('prototype');
+    setActiveSection('console');
     if (protoView === 'library') {
       setProtoView('wizard');
     } else {
@@ -570,11 +625,12 @@ export default function App() {
           onToggleComponent={handleToggleComponent}
           onUnregisterApp={handleUnregisterApp}
           onRepairPrefix={handleRepairPrefix}
-          onTogglePrefixDep={handleTogglePrefixDep}
+          onTogglePrefixDep={(pfxId, depId) => void handleTogglePrefixDep(pfxId, depId)}
           onTerminateProcess={handleTerminateProcessByPid}
           onInstallPlugin={handleInstallPlugin}
           onTogglePlugin={handleTogglePlugin}
           onDeletePlugin={handleDeletePlugin}
+          onPluginSandboxEffect={handlePluginSandboxEffect}
           onUpdateGlobalConfig={handleUpdateGlobalConfig}
           onInjectSampleLog={handleInjectSampleLog}
           onClearLogs={() => setSystemState((prev) => ({ ...prev, logs: [] }))}
@@ -630,7 +686,7 @@ export default function App() {
       )}
 
       <main className="flex-1">
-        {activeSection === 'prototype' && (
+        {activeSection === 'console' && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
             {viewportMode === 'mobile' ? (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
@@ -884,8 +940,16 @@ export default function App() {
 
       <AppRuntimeOverlay
         app={runningApp}
+        deviceProfileId={systemState.deviceProfileId}
         lang={resolvedLang}
         onTerminate={handleTerminateApp}
+        onRefreshState={() => {
+          fetch('/api/state')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((fresh: WPhoneSystemState | null) => {
+              if (fresh && Array.isArray(fresh.apps)) setSystemState(fresh);
+            });
+        }}
       />
 
       <HelperDrawer

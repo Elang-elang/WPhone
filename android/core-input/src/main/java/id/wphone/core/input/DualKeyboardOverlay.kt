@@ -15,8 +15,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /**
- * Desktop / Application Keyboard accessory bar layered above the Android IME.
- * Provides sticky modifiers and desktop navigation keys absent on mobile soft keyboards.
+ * Dual Desktop / Gaming keyboard overlay bar layered above Android IME.
+ * Lightweight Compose layout without heavy animations for Android 7.0+ (API 24+).
  */
 @Composable
 fun DesktopModifierBar(
@@ -25,6 +25,7 @@ fun DesktopModifierBar(
         "F1", "F2", "F5", "F11", "F12",
         "HOME", "END", "PGUP", "PGDN", "INS", "DEL"
     ),
+    alphaLevel: Float = 0.92f,
     onDispatchKey: (key: String, ctrl: Boolean, alt: Boolean, shift: Boolean) -> Unit
 ) {
     var stickyCtrl by remember { mutableStateOf(false) }
@@ -34,7 +35,7 @@ fun DesktopModifierBar(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color(0xFF0F172A))
+            .background(Color(0xFF0F172A).copy(alpha = alphaLevel))
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -62,14 +63,46 @@ fun DesktopModifierBar(
                         }
                     }
             ) {
-                Box(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
-                ) {
+                Box(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
                     Text(
                         text = key,
                         style = MaterialTheme.typography.labelMedium,
                         color = Color.White
                     )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GamingVirtualPadBar(
+    buttons: List<Pair<String, String>> = listOf(
+        "W" to "Up", "A" to "Left", "S" to "Down", "D" to "Right",
+        "SPACE" to "Jump", "SHIFT" to "Sprint", "E" to "Interact", "ESC" to "Menu"
+    ),
+    alphaLevel: Float = 0.85f,
+    onDispatchKey: (key: String, ctrl: Boolean, alt: Boolean, shift: Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFF111827).copy(alpha = alphaLevel))
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        buttons.forEach { (key, desc) ->
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = Color(0xFF1E293B),
+                modifier = Modifier
+                    .defaultMinSize(minWidth = 54.dp, minHeight = 44.dp)
+                    .clickable { onDispatchKey(key, false, false, false) }
+            ) {
+                Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                    Text(text = key, style = MaterialTheme.typography.labelMedium, color = Color(0xFF38BDF8))
+                    Text(text = desc, style = MaterialTheme.typography.labelSmall, color = Color(0xFFCBD5E1))
                 }
             }
         }

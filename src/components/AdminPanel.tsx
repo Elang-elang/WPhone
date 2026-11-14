@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowUp,
+  Code2,
   Cpu,
   Download,
   FileText,
@@ -12,6 +13,7 @@ import {
   Layers,
   Lock,
   PackageCheck,
+  Play,
   Power,
   Puzzle,
   RefreshCw,
@@ -26,12 +28,14 @@ import {
   GlobalRuntimeConfig,
   InstalledPlugin,
   ManagedProcess,
+  PluginSandboxExecutionResult,
   ResolvedLanguage,
   VirtualFsNode,
   WPhoneSystemState,
 } from '../types/wphone';
 import { translations, verificationLabel } from '../i18n/translations';
 import { DEPENDENCY_CATALOG, DEVICE_PROFILES } from '../data/mockData';
+import { executePluginInSandbox } from '../utils/pluginSandbox';
 
 interface AdminPanelProps {
   systemState: WPhoneSystemState;
@@ -45,6 +49,7 @@ interface AdminPanelProps {
   onInstallPlugin: (plugin: InstalledPlugin) => void;
   onTogglePlugin: (pluginId: string) => void;
   onDeletePlugin: (pluginId: string) => void;
+  onPluginSandboxEffect?: (plugin: InstalledPlugin, result: PluginSandboxExecutionResult) => void;
   onUpdateGlobalConfig: (cfg: GlobalRuntimeConfig) => void;
   onInjectSampleLog: () => void;
   onClearLogs: () => void;
@@ -73,6 +78,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onInstallPlugin,
   onTogglePlugin,
   onDeletePlugin,
+  onPluginSandboxEffect,
   onUpdateGlobalConfig,
   onInjectSampleLog,
   onClearLogs,
@@ -97,10 +103,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     systemState.prefixes[0]?.id || ''
   );
 
-  // Plugin Manager upload & inspection
+  // Plugin Manager upload, script inspector & live Worker sandbox
   const pluginUploadRef = useRef<HTMLInputElement>(null);
   const [pluginError, setPluginError] = useState<string | null>(null);
   const [pluginNotice, setPluginNotice] = useState<string | null>(null);
+  const [inspectedPluginId, setInspectedPluginId] = useState<string | null>(null);
+  const [pluginScriptDraft, setPluginScriptDraft] = useState<string>('');
+  const [sandboxOutput, setSandboxOutput] = useState<PluginSandboxExecutionResult | null>(null);
+  const [runningSandbox, setRunningSandbox] = useState(false);
 
   // Global Config Draft
   const [cfgDraft, setCfgDraft] = useState<GlobalRuntimeConfig>({ ...systemState.globalConfig });
@@ -946,7 +956,50 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setInspectedPluginId(plg.id);
+                      setSandboxOutput(null);
+                      const res = await fetch(`/api/plugins/${encodeURIComponent(plg.id)}/script`);
+                      const data = (await res.json()) as { content?: string };
+                      setPluginScriptDraft(data.content || plg.scriptPreview || '');
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 font-medium hover:bg-slate-100 dark:hover:bg-slate-800"
+                  >
+                    <Code2 className="w-3.5 h-3.5" />
+                    <span>{lang === 'id' ? 'Skrip & Sandbox' : 'Script & Sandbox'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setRunningSandbox(true);
+                      setInspectedPluginId(plg.id);
+                      try {
+                        const res = await fetch(`/api/plugins/${encodeURIComponent(plg.id)}/script`);
+                        const data = (await res.json()) as { content?: string };
+                        const code = data.content || plg.scriptPreview || '';
+                        setPluginScriptDraft(code);
+                        const result = await executePluginInSandbox(plg, code);
+                        setSandboxOutput(result);
+                        onPluginSandboxEffect?.(plg, result);
+                        await fetch(`/api/plugins/${encodeURIComponent(plg.id)}/logs`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            summary: `${result.ok ? 'OK' : 'ERR'} (${result.durationMs}ms): ${result.logs.map((l) => l.message).join(' | ')}`,
+                          }),
+                        });
+                      } finally {
+                        setRunningSandbox(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-900 dark:bg-sky-600 text-white font-semibold hover:opacity-90"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>{lang === 'id' ? 'Jalankan Sandbox' : 'Run Sandbox'}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => onTogglePlugin(plg.id)}
@@ -976,6 +1029,94 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             ))}
           </div>
+
+          {inspectedPluginId && (
+            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="font-display text-sm font-bold text-slate-900 dark:text-white">
+                  {lang === 'id' ? 'Editor & Penguji Sandbox Plugin:' : 'Plugin Script & Sandbox Runner:'}{' '}
+                  <span className="font-mono text-[#0078D4] dark:text-sky-400">{inspectedPluginId}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await fetch(`/api/plugins/${encodeURIComponent(inspectedPluginId)}/script`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ content: pluginScriptDraft }),
+                      });
+                      setPluginNotice(
+                        lang === 'id' ? 'Skrip plugin tersimpan ke disk.' : 'Saved plugin script to disk.'
+                      );
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 font-semibold"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{lang === 'id' ? 'Simpan Skrip' : 'Save Script'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={runningSandbox}
+                    onClick={async () => {
+                      const plg = systemState.plugins.find((p) => p.id === inspectedPluginId);
+                      if (!plg) return;
+                      setRunningSandbox(true);
+                      try {
+                        const result = await executePluginInSandbox(plg, pluginScriptDraft);
+                        setSandboxOutput(result);
+                        onPluginSandboxEffect?.(plg, result);
+                      } finally {
+                        setRunningSandbox(false);
+                      }
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0078D4] text-white font-semibold"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>{runningSandbox ? 'Running...' : lang === 'id' ? 'Eksekusi Sekarang' : 'Execute in Sandbox'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <textarea
+                rows={8}
+                value={pluginScriptDraft}
+                onChange={(e) => setPluginScriptDraft(e.target.value)}
+                className="w-full p-3 rounded-lg bg-slate-950 text-slate-100 font-mono text-xs border border-slate-800"
+              />
+
+              {sandboxOutput && (
+                <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5 font-mono text-[11px]">
+                  <div className="flex items-center justify-between text-slate-400">
+                    <span>
+                      Sandbox Status:{' '}
+                      <strong className={sandboxOutput.ok ? 'text-emerald-400' : 'text-amber-400'}>
+                        {sandboxOutput.ok ? 'PASSED' : 'BLOCKED / ERROR'}
+                      </strong>
+                    </span>
+                    <span className="tabular-nums">{sandboxOutput.durationMs} ms</span>
+                  </div>
+                  {sandboxOutput.logs.map((entry, idx) => (
+                    <div
+                      key={idx}
+                      className={
+                        entry.level === 'denied'
+                          ? 'text-amber-400'
+                          : entry.level === 'error'
+                            ? 'text-rose-400'
+                            : 'text-emerald-300'
+                      }
+                    >
+                      [{entry.level.toUpperCase()}] {entry.message}
+                    </div>
+                  ))}
+                  {sandboxOutput.error && (
+                    <div className="text-rose-400">[ERROR] {sandboxOutput.error}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

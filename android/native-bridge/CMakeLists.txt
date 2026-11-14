@@ -7,9 +7,10 @@ add_library(wphone_native SHARED
 )
 
 find_library(log-lib log)
-find_library(aaudio-lib aaudio)
+find_library(opensles-lib OpenSLES)
 
 target_link_libraries(wphone_native
     ${log-lib}
-    ${aaudio-lib}
+    ${opensles-lib}
+    dl
 )

@@ -50,7 +50,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Zone 1: Single-line Brand Title */}
         <button
           type="button"
-          onClick={() => onSelectSection('prototype')}
+          onClick={() => onSelectSection('console')}
           className="flex items-center gap-2.5 text-left whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0078D4] rounded-md"
         >
           <WPhoneIcon variant="launcher" className="w-7 h-7" alt="WPhone Icon" />
@@ -63,7 +63,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <nav className="hidden md:flex items-center gap-6 text-sm font-medium">
           {(
             [
-              { id: 'prototype' as const, label: t.nav.prototype },
+              { id: 'console' as const, label: t.nav.console },
               { id: 'android' as const, label: t.nav.android },
               { id: 'docs' as const, label: t.nav.docs },
               { id: 'compatibility' as const, label: t.nav.compatibility },
@@ -107,7 +107,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div className="md:hidden border-t border-slate-100 dark:border-slate-800/80 px-4 py-2 flex items-center gap-3 overflow-x-auto text-xs font-medium">
         {(
           [
-            { id: 'prototype' as const, label: t.nav.prototype },
+            { id: 'console' as const, label: t.nav.console },
             { id: 'android' as const, label: t.nav.android },
             { id: 'docs' as const, label: t.nav.docs },
             { id: 'compatibility' as const, label: t.nav.compatibility },
@@ -139,7 +139,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div className="border-t border-slate-200/70 dark:border-slate-800/80 bg-slate-50/80 dark:bg-slate-900/60">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3 text-xs">
           <div className="flex items-center gap-2">
-            {activeSection === 'prototype' ? (
+            {activeSection === 'console' ? (
               <>
                 <span className="text-slate-500 dark:text-slate-400 font-medium hidden sm:inline">
                   {t.toolbar.viewportLabel}:

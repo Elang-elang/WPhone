@@ -1,0 +1,113 @@
+name: WPhone CI & Android Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  web-and-server-ci:
+    name: Web Testbench & Server CI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run lint
+
+      - name: Build production web bundle
+        run: npm run build
+
+      - name: Verify Node.js server boot & PE/Registry/Android endpoints
+        run: |
+          NODE_ENV=production PORT=3005 node server.ts &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID || true" EXIT
+          for i in $(seq 1 15); do
+            curl -sf http://localhost:3005/api/health && break || sleep 1
+          done
+          curl -sf http://localhost:3005/api/state | grep -q '"apps"'
+          curl -sf http://localhost:3005/api/android/tree | grep -q 'MainActivity.kt'
+          curl -sf http://localhost:3005/api/prefixes/pfx-notepadpp/registry | grep -q 'dllOverrides'
+          curl -sf http://localhost:3005/api/git/status | grep -q 'hasReleaseWorkflow'
+
+  android-release-apk:
+    name: Build Android 7.0+ (API 24) Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK & NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK 27 & CMake 3.22
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.1.12297006" "cmake;3.22.1"
+
+      - name: Setup Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Run Android unit tests (core-config, core-prefix, core-plugin)
+        working-directory: android
+        run: gradle :core-config:testDebugUnitTest :core-prefix:testDebugUnitTest :core-plugin:testDebugUnitTest --stacktrace
+
+      - name: Run Android Lint & Build Debug + Release APKs
+        working-directory: android
+        env:
+          WPHONE_KEYSTORE_BASE64: ${{ secrets.WPHONE_KEYSTORE_BASE64 }}
+          WPHONE_KEYSTORE_PASSWORD: ${{ secrets.WPHONE_KEYSTORE_PASSWORD }}
+          WPHONE_KEY_ALIAS: ${{ secrets.WPHONE_KEY_ALIAS }}
+          WPHONE_KEY_PASSWORD: ${{ secrets.WPHONE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$WPHONE_KEYSTORE_BASE64" ]; then
+            echo "$WPHONE_KEYSTORE_BASE64" | base64 -d > release.keystore
+            export WPHONE_KEYSTORE_PATH="$(pwd)/release.keystore"
+          fi
+          gradle :app:lintDebug :app:assembleDebug :app:assembleRelease --stacktrace
+
+      - name: Package APK Artifacts & SHA-256 Checksums
+        working-directory: android
+        run: |
+          mkdir -p ../release-artifacts
+          cp app/build/outputs/apk/debug/*.apk ../release-artifacts/ || true
+          cp app/build/outputs/apk/release/*.apk ../release-artifacts/ || true
+          cd ../release-artifacts
+          sha256sum *.apk > SHA256SUMS.txt
+
+      - name: Upload APK Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wphone-android-apks
+          path: release-artifacts/
+
+      - name: Publish GitHub Release on Tag Push
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/*.apk
+            release-artifacts/SHA256SUMS.txt
+          generate_release_notes: true

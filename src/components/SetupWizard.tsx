@@ -72,6 +72,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
       setAdv((prev) => ({
         ...prev,
         graphicsBackend: prof.recommendedGraphics,
+        audioDriver: prof.recommendedAudio,
         optionalDependencies:
           prof.recommendedEasyProfile === 'light'
             ? []
@@ -299,9 +300,17 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({
                 <span>{t.hardwareMetrics}</span>
               </h3>
               <span className="font-mono text-xs text-slate-500 dark:text-slate-400">
-                Android {device.androidVersion}
+                Android {device.androidVersion} (API {device.androidApiLevel})
               </span>
             </div>
+
+            {(device.isSubAndroid10 || device.lowRamMode) && (
+              <div className="p-3 rounded-lg border border-sky-200 dark:border-sky-800/80 bg-sky-50/70 dark:bg-sky-950/30 text-xs text-sky-900 dark:text-sky-200">
+                {lang === 'id'
+                  ? `Mode Ringan Android < 10 / RAM Terbatas aktif otomatis: memakai OpenSL ES audio, WineD3D VirGL, BOX64_MMAP32=1, serta batas resolusi 960x540.`
+                  : `Sub-Android 10 / Low-RAM Lightweight Mode auto-enabled: uses OpenSL ES audio, WineD3D VirGL, BOX64_MMAP32=1, and 960x540 virtual desktop cap.`}
+              </div>
+            )}
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
               <div>

@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -10,19 +11,49 @@ android {
 
     defaultConfig {
         applicationId = "id.wphone"
-        minSdk = 28
+        minSdk = 24
         targetSdk = 35
-        versionCode = 1
+        versionCode = 10000
         versionName = "1.0.0"
 
         ndk {
-            // Prioritize ARM64-v8a for Wine WoW64 + Box64 execution
+            // Prioritize ARM64-v8a for Wine WoW64 + Box64 execution across Android 7.0+ devices
             abiFilters += listOf("arm64-v8a")
         }
 
         externalNativeBuild {
             cmake {
                 cppFlags += "-std=c++17 -O2 -Wall"
+            }
+        }
+    }
+
+    val keystorePath = System.getenv("WPHONE_KEYSTORE_PATH")
+    signingConfigs {
+        if (!keystorePath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("WPHONE_KEYSTORE_PASSWORD") ?: ""
+                keyAlias = System.getenv("WPHONE_KEY_ALIAS") ?: ""
+                keyPassword = System.getenv("WPHONE_KEY_PASSWORD") ?: ""
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            isMinifyEnabled = false
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            if (!keystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("release")
             }
         }
     }
@@ -36,6 +67,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -55,6 +87,9 @@ dependencies {
     implementation(project(":core-plugin"))
     implementation(project(":core-diagnostics"))
 
+    implementation("androidx.core:core-ktx:1.15.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.9.3")
@@ -62,4 +97,6 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.6")
+
+    testImplementation("junit:junit:4.13.2")
 }

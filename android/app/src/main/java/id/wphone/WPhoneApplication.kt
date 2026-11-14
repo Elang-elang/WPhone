@@ -14,6 +14,8 @@ object WPhoneNativeBridge {
     }
 
     external fun getNativeAbiInfo(): String
+    external fun getRecommendedAudioBackend(preferLightweight: Boolean): String
+    external fun getHostPageSizeKb(): Int
     external fun terminateProcessGracefully(pid: Int): Int
 }
 
@@ -30,14 +32,21 @@ class WPhoneApplication : Application() {
         private set
     lateinit var fileGuard: ProtectedFileManager
         private set
+    lateinit var repository: WPhoneRepository
+        private set
 
     override fun onCreate() {
         super.onCreate()
         wphoneRoot = File(filesDir, "WPhone").apply { mkdirs() }
+        File(wphoneRoot, "config").mkdirs()
+        File(wphoneRoot, "imports").mkdirs()
+        File(wphoneRoot, "logs").mkdirs()
+
         deviceAnalyzer = DeviceCapabilityAnalyzer(this)
         runtimeManager = RuntimeManager(wphoneRoot)
         prefixManager = PrefixManager(wphoneRoot)
         pluginManager = WrPluginManager(File(wphoneRoot, "plugins").apply { mkdirs() })
         fileGuard = ProtectedFileManager(wphoneRoot)
+        repository = WPhoneRepository(this, wphoneRoot, prefixManager, deviceAnalyzer)
     }
 }

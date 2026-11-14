@@ -26,8 +26,12 @@ export const DEVICE_PROFILES: DeviceHardwareProfile[] = [
     vulkanVersion: '1.3.275',
     turnipSupported: true,
     androidVersion: 14,
+    androidApiLevel: 34,
+    isSubAndroid10: false,
+    lowRamMode: false,
     recommendedEasyProfile: 'advanced',
     recommendedGraphics: 'turnip-dxvk',
+    recommendedAudio: 'pulse-aaudio',
     notesId:
       'GPU Adreno 750 mendukung driver Mesa Turnip open-source dengan Vulkan 1.3 penuh. Optimal untuk Wine WoW64 + Box64 + DXVK/VKD3D.',
     notesEn:
@@ -35,7 +39,7 @@ export const DEVICE_PROFILES: DeviceHardwareProfile[] = [
   },
   {
     id: 'dimensity8300',
-    name: 'Mid-Range Dimensity 8300',
+    name: 'Mid-Range Dimensity 8300 (Android 14)',
     soc: 'MediaTek MT6897',
     cpuArch: 'ARM64-v9 / Cortex-A715 + A510',
     cores: 8,
@@ -46,16 +50,92 @@ export const DEVICE_PROFILES: DeviceHardwareProfile[] = [
     vulkanVersion: '1.3.250 (OEM)',
     turnipSupported: false,
     androidVersion: 14,
+    androidApiLevel: 34,
+    isSubAndroid10: false,
+    lowRamMode: false,
     recommendedEasyProfile: 'medium',
     recommendedGraphics: 'system-vulkan-dxvk',
+    recommendedAudio: 'pulse-aaudio',
     notesId:
       'GPU Mali tidak mendukung Mesa Turnip. Gunakan driver Vulkan bawaan sistem atau VirGL/WineD3D untuk aplikasi produktivitas dan DirectX 9–11 ringan.',
     notesEn:
       'Mali GPUs do not support Mesa Turnip. Use System Vulkan + DXVK or VirGL/WineD3D for productivity tools and lighter DirectX 9–11 apps.',
   },
   {
+    id: 'android9-pie',
+    name: 'Android 9.0 Pie · Snapdragon 660 (4 GB RAM)',
+    soc: 'Qualcomm SDM660',
+    cpuArch: 'ARM64-v8.0 / Kryo 260',
+    cores: 8,
+    ramGb: 4,
+    freeStorageGb: 14.2,
+    gpuName: 'Adreno 512',
+    gpuVendor: 'adreno',
+    vulkanVersion: '1.0.66',
+    turnipSupported: false,
+    androidVersion: 9,
+    androidApiLevel: 28,
+    isSubAndroid10: true,
+    lowRamMode: true,
+    recommendedEasyProfile: 'light',
+    recommendedGraphics: 'wined3d-virgl',
+    recommendedAudio: 'pulse-opensl',
+    notesId:
+      'Perangkat Android < 10 dengan RAM 4 GB: Mode Ringan aktif otomatis (VirGL/GLES + OpenSL ES + BOX64_MMAP32=1 + batas resolusi 960x540).',
+    notesEn:
+      'Sub-Android 10 device with 4 GB RAM: Lightweight Legacy Mode auto-enabled (VirGL/GLES + OpenSL ES + BOX64_MMAP32=1 + 960x540 cap).',
+  },
+  {
+    id: 'android8-oreo',
+    name: 'Android 8.1 Oreo · Helio P60 (3 GB RAM)',
+    soc: 'MediaTek MT6771',
+    cpuArch: 'ARM64-v8.0 / Cortex-A73 + A53',
+    cores: 8,
+    ramGb: 3,
+    freeStorageGb: 8.6,
+    gpuName: 'Mali-G72 MP3',
+    gpuVendor: 'mali',
+    vulkanVersion: 'OpenGL ES 3.2 (No Vulkan)',
+    turnipSupported: false,
+    androidVersion: 8.1,
+    androidApiLevel: 27,
+    isSubAndroid10: true,
+    lowRamMode: true,
+    recommendedEasyProfile: 'light',
+    recommendedGraphics: 'wined3d-virgl',
+    recommendedAudio: 'pulse-opensl',
+    notesId:
+      'Tanpa driver Vulkan penuh & RAM 3 GB: menggunakan OpenGL ES / VirGL dan jembatan audio OpenSL ES agar tetap ringan tanpa membebani LMK.',
+    notesEn:
+      'Without full Vulkan & with 3 GB RAM: enforces VirGL/OpenGL ES and OpenSL ES audio bridge to prevent Android Low Memory Killer terminations.',
+  },
+  {
+    id: 'android7-nougat',
+    name: 'Android 7.0 Nougat · Minimum Target (2 GB RAM)',
+    soc: 'Qualcomm MSM8953 (SD 625)',
+    cpuArch: 'ARM64-v8.0 / Cortex-A53',
+    cores: 8,
+    ramGb: 2,
+    freeStorageGb: 5.4,
+    gpuName: 'Adreno 506',
+    gpuVendor: 'adreno',
+    vulkanVersion: 'OpenGL ES 3.1 (API 24)',
+    turnipSupported: false,
+    androidVersion: 7,
+    androidApiLevel: 24,
+    isSubAndroid10: true,
+    lowRamMode: true,
+    recommendedEasyProfile: 'light',
+    recommendedGraphics: 'wined3d-virgl',
+    recommendedAudio: 'pulse-opensl',
+    notesId:
+      'Target minimum resmi API 24: memakai OpenSL ES native (tanpa libaaudio.so), WineD3D VirGL, esync nonaktif, dan batas memori kontainer ketat.',
+    notesEn:
+      'Official API 24 baseline: uses native OpenSL ES (bypassing libaaudio.so), WineD3D VirGL, esync disabled, and strict container RAM budgeting.',
+  },
+  {
     id: 'sd680',
-    name: 'Entry Snapdragon 680 (RAM Terbatas)',
+    name: 'Entry Snapdragon 680 (Android 13 · 4 GB)',
     soc: 'Qualcomm SM6225',
     cpuArch: 'ARM64-v8.0 / Kryo 265',
     cores: 8,
@@ -66,8 +146,12 @@ export const DEVICE_PROFILES: DeviceHardwareProfile[] = [
     vulkanVersion: '1.1.128',
     turnipSupported: false,
     androidVersion: 13,
+    androidApiLevel: 33,
+    isSubAndroid10: false,
+    lowRamMode: true,
     recommendedEasyProfile: 'light',
     recommendedGraphics: 'wined3d-virgl',
+    recommendedAudio: 'pulse-opensl',
     notesId:
       'RAM 4 GB dan Vulkan 1.1 membatasi translasi DirectX berat. Profil Light direkomendasikan untuk utilitas ringan dan aplikasi x86/x64 berjejak memori rendah.',
     notesEn:
@@ -173,6 +257,22 @@ export const INITIAL_COMPONENTS: RuntimeComponent[] = [
       'Provides GNU C library (glibc) and rootless filesystem path mapping on top of Android Bionic userspace.',
   },
   {
+    id: 'pulse-opensl',
+    name: 'PulseAudio → OpenSL ES Legacy Bridge',
+    category: 'audio',
+    version: '16.1-opensles',
+    license: 'LGPL-2.1+',
+    sizeMb: 6,
+    installed: true,
+    essential: true,
+    archSupport: 'Android 7.0+ (API 24+) Universal',
+    verification: 'verified',
+    descriptionId:
+      'Jembatan audio ringan berbasis OpenSL ES untuk Android 7.0–8.0 (API 24–26) serta perangkat RAM 2–4 GB.',
+    descriptionEn:
+      'Lightweight OpenSL ES audio sink for Android 7.0–8.0 (API 24–26) and 2–4 GB RAM hardware.',
+  },
+  {
     id: 'pulse-aaudio',
     name: 'PulseAudio → AAudio Bridge',
     category: 'audio',
@@ -180,13 +280,13 @@ export const INITIAL_COMPONENTS: RuntimeComponent[] = [
     license: 'LGPL-2.1+',
     sizeMb: 12,
     installed: true,
-    essential: true,
-    archSupport: 'Android 8.1+ Native AAudio',
+    essential: false,
+    archSupport: 'Android 8.1+ Native AAudio (Dynamic dlopen)',
     verification: 'verified',
     descriptionId:
-      'Merutekan keluaran audio Wine dari server PulseAudio menuju API native Android AAudio berlatensi rendah.',
+      'Dimuat secara dinamis pada Android 8.1+ (API 27+) untuk latensi audio rendah tanpa memutus kompatibilitas Android 7.',
     descriptionEn:
-      'Routes Wine audio streams from PulseAudio inside the userspace container directly to low-latency Android AAudio.',
+      'Loaded dynamically on Android 8.1+ (API 27+) for low latency without breaking Android 7 compatibility.',
   },
   {
     id: 'dxvk',
@@ -432,6 +532,45 @@ export const INITIAL_PLUGINS: InstalledPlugin[] = [
     installedAt: '2026-11-12',
     readme: 'Frontend plugin example using wphone.frontend@1.0 API.',
     accentColor: '#0F766E',
+    scriptPreview: `// WPhone Frontend Plugin Sandbox Script (wphone.frontend@1.0)
+function onEnable(api) {
+  api.log('info', 'Applying Slate & Teal Pro UI accent');
+  api.setAccentColor('#0F766E');
+  api.registerKeyboardPreset({
+    name: 'Cobalt Quick Dev Bar',
+    mode: 'desktop',
+    desktopKeys: ['ESC', 'TAB', 'CTRL', 'ALT', 'SHIFT', 'F5', 'F12', 'DEL']
+  });
+}
+onEnable(api);`,
+  },
+  {
+    id: 'id.wphone.legacy-android9-tuner',
+    name: 'Sub-Android 10 Memory & VirGL Auto-Tuner',
+    version: '1.1.0',
+    category: 'frontend',
+    author: 'WPhone Compatibility Lab',
+    description:
+      'Menginjeksi saran environment ringan BOX64_MMAP32=1 dan VirGL untuk perangkat Android 7–9 dengan RAM terbatas.',
+    scriptLanguage: 'javascript',
+    mainScript: 'legacy_tuner.js',
+    apiVersion: 'wphone.frontend@1.0',
+    permissions: ['prefix.env.suggest', 'diagnostics.log'],
+    dependencies: [],
+    enabled: true,
+    sha256: '4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a',
+    installedAt: '2026-11-14',
+    readme: 'Suggests conservative Box64/WineD3D flags safe for Android 7.0–9.0.',
+    accentColor: '#0284C7',
+    scriptPreview: `// Sub-Android 10 Lightweight Env Tuner
+api.log('info', 'Evaluating legacy ARM64 memory budget...');
+api.suggestPrefixEnv({
+  BOX64_MMAP32: '1',
+  BOX64_DYNAREC_STRONGMEM: '0',
+  WINEESYNC: '0',
+  PULSE_LATENCY_MSEC: '60'
+});
+api.log('info', 'Applied sub-Android 10 VirGL/OpenSL lightweight env hints.');`,
   },
   {
     id: 'id.wphone.box64-perf-profiles',

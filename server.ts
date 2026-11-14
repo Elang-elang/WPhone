@@ -1,13 +1,23 @@
+import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import express from 'express';
-import type { Request, Response } from 'express';
+import type { NextFunction, Request, Response } from 'express';
 import JSZip from 'jszip';
 import multer from 'multer';
-import { createInitialSystemState } from './src/data/mockData.ts';
+import { createInitialSystemState, DEVICE_PROFILES, INITIAL_PLUGINS } from './src/data/mockData.ts';
 import { inspectWindowsBinary } from './src/server/peParser.ts';
+import {
+  DEPENDENCY_DLL_MAP,
+  evaluateAppPreflight,
+  normalizeDllOverrideMode,
+  parseUserReg,
+  serializeUserReg,
+} from './src/server/wineRegistry.ts';
 import type {
+  DllOverrideMode,
+  GitRepoStatus,
   InstalledPlugin,
   VirtualFsNode,
   WPhoneSystemState,
@@ -56,19 +66,50 @@ function isProtectedVirtualPath(vPath: string): boolean {
 function createPrefixDiskStructure(
   prefixId: string,
   appName: string,
-  winVersion: string,
-  deps: string[]
+  winVersion: 'win10' | 'win11' | 'win7',
+  deps: string[],
+  graphicsBackend?: string
 ) {
   const prefixDir = path.join(WORKSPACE_DIR, 'prefixes', prefixId);
-  fs.mkdirSync(path.join(prefixDir, 'drive_c', 'windows', 'system32'), { recursive: true });
+  const sys32 = path.join(prefixDir, 'drive_c', 'windows', 'system32');
+  fs.mkdirSync(sys32, { recursive: true });
   fs.mkdirSync(path.join(prefixDir, 'drive_c', 'Program Files'), { recursive: true });
   fs.mkdirSync(path.join(prefixDir, 'drive_c', 'users', 'wphone'), { recursive: true });
+
+  const initialOverrides: Record<string, DllOverrideMode> = {};
+  if (graphicsBackend === 'turnip-dxvk' || graphicsBackend === 'system-vulkan-dxvk') {
+    initialOverrides.d3d9 = 'native,builtin';
+    initialOverrides.d3d10core = 'native,builtin';
+    initialOverrides.d3d11 = 'native,builtin';
+    initialOverrides.dxgi = 'native,builtin';
+  }
+  for (const dep of deps) {
+    const info = DEPENDENCY_DLL_MAP[dep];
+    if (info) {
+      for (const dllFile of info.dllFiles) {
+        const markerPath = path.join(sys32, dllFile);
+        if (!fs.existsSync(markerPath)) {
+          fs.writeFileSync(markerPath, `WPhone provisioned runtime stub for ${dep} (${dllFile})\n`, 'utf8');
+        }
+      }
+      Object.assign(initialOverrides, info.overrides);
+    }
+  }
 
   const userRegPath = path.join(prefixDir, 'user.reg');
   if (!fs.existsSync(userRegPath)) {
     fs.writeFileSync(
       userRegPath,
-      `WINE REGISTRY Version 2\n;; Isolated prefix for ${appName}\n\n[Software\\\\Wine\\\\Drivers]\n"Audio"="pulse"\n\n[Software\\\\Wine]\n"Version"="${winVersion}"\n`,
+      serializeUserReg(appName, {
+        prefixId,
+        winVersion,
+        audioDriver: 'pulse',
+        directDrawRenderer: graphicsBackend === 'wined3d-virgl' ? 'opengl' : 'vulkan',
+        offscreenRenderingMode: 'fbo',
+        videoMemorySize: graphicsBackend === 'wined3d-virgl' ? 256 : 1024,
+        csmtEnabled: true,
+        dllOverrides: initialOverrides,
+      }),
       'utf8'
     );
   }
@@ -99,13 +140,29 @@ function createPrefixDiskStructure(
   );
 }
 
+function seedBuiltinPluginScripts(plugins: InstalledPlugin[]) {
+  for (const pl of plugins) {
+    const fallbackScript =
+      pl.scriptPreview || INITIAL_PLUGINS.find((bp) => bp.id === pl.id)?.scriptPreview;
+    if (!fallbackScript) continue;
+    if (!pl.scriptPreview) {
+      pl.scriptPreview = fallbackScript;
+    }
+    const plDir = path.join(WORKSPACE_DIR, 'plugins', pl.id);
+    fs.mkdirSync(plDir, { recursive: true });
+    const scriptPath = path.join(plDir, pl.mainScript || 'main.js');
+    if (!fs.existsSync(scriptPath)) {
+      fs.writeFileSync(scriptPath, fallbackScript, 'utf8');
+    }
+  }
+}
+
 function ensureWorkspaceSeeded(): WPhoneSystemState {
   const baseFolders = ['runtime', 'prefixes', 'imports', 'config', 'plugins', 'logs'];
   for (const dir of baseFolders) {
     fs.mkdirSync(path.join(WORKSPACE_DIR, dir), { recursive: true });
   }
 
-  // Seed core protected runtime descriptors on disk
   const runtimeInfoPath = path.join(WORKSPACE_DIR, 'runtime', 'manifest.json');
   if (!fs.existsSync(runtimeInfoPath)) {
     fs.writeFileSync(
@@ -115,7 +172,8 @@ function ensureWorkspaceSeeded(): WPhoneSystemState {
           engine: 'Wine 9.21 WoW64 + Box64 0.3.2',
           sharedReadOnly: true,
           hostTarget: 'android-arm64',
-          audioBridge: 'pulseaudio-aaudio',
+          minAndroidApi: 24,
+          audioBridge: 'opensles-and-dynamic-aaudio',
         },
         null,
         2
@@ -130,10 +188,10 @@ function ensureWorkspaceSeeded(): WPhoneSystemState {
       globalCfgPath,
       JSON.stringify(
         {
-          managedSystem: 'wphone-v1',
+          managedSystem: 'wphone-release-1.0.0',
           cpuTranslator: 'box64-0.3.2',
           wineMode: 'wow64-arm64',
-          audioBridge: 'pulseaudio-aaudio',
+          audioBridge: 'pulseaudio-opensles-aaudio',
           sharedRuntimeReadOnly: true,
         },
         null,
@@ -147,7 +205,7 @@ function ensureWorkspaceSeeded(): WPhoneSystemState {
   if (!fs.existsSync(sampleReadme)) {
     fs.writeFileSync(
       sampleReadme,
-      'Place Windows .exe, .msi, or portable directories here, or upload them directly from the WPhone UI.\n',
+      'Place Windows .exe, .msi, or portable directories here, or upload them directly from WPhone Library.\n',
       'utf8'
     );
   }
@@ -157,8 +215,15 @@ function ensureWorkspaceSeeded(): WPhoneSystemState {
       const parsed = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) as WPhoneSystemState;
       for (const pfx of parsed.prefixes) {
         const app = parsed.apps.find((a) => a.prefixId === pfx.id);
-        createPrefixDiskStructure(pfx.id, app?.name || pfx.id, pfx.winVersion, pfx.installedDeps);
+        createPrefixDiskStructure(
+          pfx.id,
+          app?.name || pfx.id,
+          pfx.winVersion,
+          pfx.installedDeps,
+          app?.graphicsBackend
+        );
       }
+      seedBuiltinPluginScripts(parsed.plugins);
       return parsed;
     } catch {
       // fall through to fresh seed
@@ -168,8 +233,15 @@ function ensureWorkspaceSeeded(): WPhoneSystemState {
   const initial = createInitialSystemState();
   for (const pfx of initial.prefixes) {
     const app = initial.apps.find((a) => a.prefixId === pfx.id);
-    createPrefixDiskStructure(pfx.id, app?.name || pfx.id, pfx.winVersion, pfx.installedDeps);
+    createPrefixDiskStructure(
+      pfx.id,
+      app?.name || pfx.id,
+      pfx.winVersion,
+      pfx.installedDeps,
+      app?.graphicsBackend
+    );
   }
+  seedBuiltinPluginScripts(initial.plugins);
   fs.writeFileSync(STATE_FILE, JSON.stringify(initial, null, 2), 'utf8');
   return initial;
 }
@@ -222,6 +294,59 @@ function walkFiles(dir: string, baseDir: string, out: Array<{ path: string; size
   }
 }
 
+function readGitStatus(): GitRepoStatus {
+  const hasWorkflow = fs.existsSync(path.join(ROOT_DIR, '.github', 'workflows', 'ci-and-release.yml'));
+  const gitDirExists = fs.existsSync(path.join(ROOT_DIR, '.git'));
+  if (!gitDirExists) {
+    return {
+      initialized: false,
+      branch: 'uninitialized',
+      headCommit: '',
+      shortCommit: '',
+      latestTag: null,
+      commitCount: 0,
+      dirtyFiles: 0,
+      remotes: [],
+      hasReleaseWorkflow: hasWorkflow,
+    };
+  }
+
+  const runGit = (args: string[]): string => {
+    try {
+      return execFileSync('git', args, { cwd: ROOT_DIR, encoding: 'utf8' }).trim();
+    } catch {
+      return '';
+    }
+  };
+
+  const branch = runGit(['rev-parse', '--abbrev-ref', 'HEAD']) || 'main';
+  const headCommit = runGit(['rev-parse', 'HEAD']);
+  const shortCommit = runGit(['rev-parse', '--short', 'HEAD']);
+  const latestTag = runGit(['describe', '--tags', '--abbrev=0']) || null;
+  const commitCount = Number.parseInt(runGit(['rev-list', '--count', 'HEAD']) || '0', 10) || 0;
+  const porcelain = runGit(['status', '--porcelain']);
+  const dirtyFiles = porcelain ? porcelain.split('\n').filter(Boolean).length : 0;
+
+  const remotesRaw = runGit(['remote', '-v']);
+  const remoteMap = new Map<string, string>();
+  for (const line of remotesRaw.split('\n')) {
+    const m = line.match(/^(\S+)\s+(\S+)/);
+    if (m) remoteMap.set(m[1], m[2]);
+  }
+
+  return {
+    initialized: true,
+    branch,
+    headCommit,
+    shortCommit,
+    latestTag,
+    commitCount,
+    dirtyFiles,
+    remotes: Array.from(remoteMap.entries()).map(([name, url]) => ({ name, url })),
+    hasReleaseWorkflow: hasWorkflow,
+  };
+}
+
 async function startServer() {
   let currentState = ensureWorkspaceSeeded();
   const app = express();
@@ -233,6 +358,7 @@ async function startServer() {
       workspaceDir: WORKSPACE_DIR,
       androidProjectReady: fs.existsSync(ANDROID_DIR),
       nodeVersion: process.version,
+      releaseMode: true,
     });
   });
 
@@ -250,7 +376,13 @@ async function startServer() {
     currentState = incoming;
     for (const pfx of currentState.prefixes) {
       const targetApp = currentState.apps.find((a) => a.prefixId === pfx.id);
-      createPrefixDiskStructure(pfx.id, targetApp?.name || pfx.id, pfx.winVersion, pfx.installedDeps);
+      createPrefixDiskStructure(
+        pfx.id,
+        targetApp?.name || pfx.id,
+        pfx.winVersion,
+        pfx.installedDeps,
+        targetApp?.graphicsBackend
+      );
     }
     saveState(currentState);
     res.json({ ok: true });
@@ -379,11 +511,7 @@ async function startServer() {
   // 3. Real Windows PE32 / PE32+ & MSI Binary Inspector
   app.post('/api/pe/inspect', upload.single('binary'), (req: Request, res: Response) => {
     if (req.file) {
-      const savedPath = path.join(
-        WORKSPACE_DIR,
-        'imports',
-        path.basename(req.file.originalname)
-      );
+      const savedPath = path.join(WORKSPACE_DIR, 'imports', path.basename(req.file.originalname));
       fs.writeFileSync(savedPath, req.file.buffer);
       const result = inspectWindowsBinary(req.file.buffer, req.file.originalname);
       res.json({ ...result, savedVirtualPath: toVirtualPath(savedPath) });
@@ -406,7 +534,7 @@ async function startServer() {
     res.status(400).json({ error: 'Provide a Windows binary file or workspace path' });
   });
 
-  // 4. Real Wine Prefix Provisioning & Repair
+  // 4. Real Wine Prefix Provisioning, Registry (.reg) Editor & Dependency Provisioner
   app.post('/api/prefixes/:id/repair', (req: Request, res: Response) => {
     const id = String(req.params.id);
     const pfx = currentState.prefixes.find((p) => p.id === id);
@@ -415,12 +543,181 @@ async function startServer() {
       id,
       targetApp?.name || id,
       pfx?.winVersion || 'win10',
-      pfx?.installedDeps || []
+      pfx?.installedDeps || [],
+      targetApp?.graphicsBackend
     );
     res.json({ ok: true, path: `/WPhone/prefixes/${id}` });
   });
 
-  // 5. Real .wrplugin ZIP Archive Parser & Generator
+  app.get('/api/prefixes/:id/registry', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const pfx = currentState.prefixes.find((p) => p.id === id);
+    const targetApp = currentState.apps.find((a) => a.prefixId === id);
+    const prefixDirExists = fs.existsSync(path.join(WORKSPACE_DIR, 'prefixes', id));
+    if (!pfx && !targetApp && !prefixDirExists) {
+      res.status(404).json({ error: 'Prefix not found' });
+      return;
+    }
+    createPrefixDiskStructure(
+      id,
+      targetApp?.name || id,
+      pfx?.winVersion || 'win10',
+      pfx?.installedDeps || [],
+      targetApp?.graphicsBackend
+    );
+    const userRegPath = path.join(WORKSPACE_DIR, 'prefixes', id, 'user.reg');
+    const raw = fs.readFileSync(userRegPath, 'utf8');
+    res.json(parseUserReg(id, raw));
+  });
+
+  app.put('/api/prefixes/:id/registry', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const pfx = currentState.prefixes.find((p) => p.id === id);
+    const targetApp = currentState.apps.find((a) => a.prefixId === id);
+    const prefixDirExists = fs.existsSync(path.join(WORKSPACE_DIR, 'prefixes', id));
+    if (!pfx && !targetApp && !prefixDirExists) {
+      res.status(404).json({ error: 'Prefix not found' });
+      return;
+    }
+    createPrefixDiskStructure(
+      id,
+      targetApp?.name || id,
+      pfx?.winVersion || 'win10',
+      pfx?.installedDeps || [],
+      targetApp?.graphicsBackend
+    );
+
+    const userRegPath = path.join(WORKSPACE_DIR, 'prefixes', id, 'user.reg');
+    const body = req.body as {
+      rawUserReg?: string;
+      winVersion?: 'win10' | 'win11' | 'win7';
+      audioDriver?: 'pulse' | 'alsa' | 'null';
+      directDrawRenderer?: 'opengl' | 'gdi' | 'vulkan';
+      offscreenRenderingMode?: 'fbo' | 'backbuffer';
+      videoMemorySize?: number;
+      csmtEnabled?: boolean;
+      dllOverrides?: Record<string, string>;
+    };
+
+    let nextRaw: string;
+    if (typeof body.rawUserReg === 'string' && body.rawUserReg.includes('WINE REGISTRY')) {
+      nextRaw = body.rawUserReg;
+    } else {
+      const normalizedOverrides: Record<string, DllOverrideMode> = {};
+      for (const [k, v] of Object.entries(body.dllOverrides || {})) {
+        if (k.trim()) normalizedOverrides[k.trim().toLowerCase()] = normalizeDllOverrideMode(v);
+      }
+      nextRaw = serializeUserReg(targetApp?.name || id, {
+        prefixId: id,
+        winVersion: body.winVersion || pfx?.winVersion || 'win10',
+        audioDriver: body.audioDriver || 'pulse',
+        directDrawRenderer: body.directDrawRenderer || 'opengl',
+        offscreenRenderingMode: body.offscreenRenderingMode || 'fbo',
+        videoMemorySize: Number(body.videoMemorySize) || 512,
+        csmtEnabled: body.csmtEnabled ?? true,
+        dllOverrides: normalizedOverrides,
+      });
+    }
+
+    fs.writeFileSync(userRegPath, nextRaw, 'utf8');
+    const parsed = parseUserReg(id, nextRaw);
+    if (pfx) {
+      pfx.winVersion = parsed.winVersion;
+      saveState(currentState);
+    }
+    res.json(parsed);
+  });
+
+  app.post('/api/prefixes/:id/deps', (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const { depId, action } = req.body as { depId: string; action: 'install' | 'remove' };
+    const pfx = currentState.prefixes.find((p) => p.id === id);
+    if (!pfx) {
+      res.status(404).json({ error: 'Prefix not found' });
+      return;
+    }
+
+    const targetApp = currentState.apps.find((a) => a.prefixId === id);
+    createPrefixDiskStructure(
+      id,
+      targetApp?.name || id,
+      pfx.winVersion,
+      pfx.installedDeps,
+      targetApp?.graphicsBackend
+    );
+    const userRegPath = path.join(WORKSPACE_DIR, 'prefixes', id, 'user.reg');
+    const currentHive = parseUserReg(id, fs.readFileSync(userRegPath, 'utf8'));
+    const sys32 = path.join(WORKSPACE_DIR, 'prefixes', id, 'drive_c', 'windows', 'system32');
+
+    const mapEntry = DEPENDENCY_DLL_MAP[depId];
+    if (action === 'install') {
+      if (!pfx.installedDeps.includes(depId)) {
+        pfx.installedDeps.push(depId);
+        pfx.sizeMb += 28;
+      }
+      if (mapEntry) {
+        for (const dllFile of mapEntry.dllFiles) {
+          fs.writeFileSync(
+            path.join(sys32, dllFile),
+            `WPhone provisioned runtime module for ${depId} (${dllFile})\n`,
+            'utf8'
+          );
+        }
+        Object.assign(currentHive.dllOverrides, mapEntry.overrides);
+      }
+    } else {
+      pfx.installedDeps = pfx.installedDeps.filter((d) => d !== depId);
+      if (mapEntry) {
+        for (const dll of Object.keys(mapEntry.overrides)) {
+          delete currentHive.dllOverrides[dll];
+        }
+      }
+    }
+
+    const updatedRaw = serializeUserReg(targetApp?.name || id, currentHive);
+    fs.writeFileSync(userRegPath, updatedRaw, 'utf8');
+    saveState(currentState);
+    res.json({
+      ok: true,
+      prefix: pfx,
+      registry: parseUserReg(id, updatedRaw),
+    });
+  });
+
+  // 5. Real Compatibility Preflight Evaluation
+  app.post('/api/apps/:id/preflight', (req: Request, res: Response) => {
+    const appId = String(req.params.id);
+    const targetApp = currentState.apps.find((a) => a.id === appId);
+    if (!targetApp) {
+      res.status(404).json({ error: 'Application not found' });
+      return;
+    }
+    const prefix = currentState.prefixes.find((p) => p.id === targetApp.prefixId);
+    createPrefixDiskStructure(
+      targetApp.prefixId,
+      targetApp.name,
+      prefix?.winVersion || 'win10',
+      prefix?.installedDeps || [],
+      targetApp.graphicsBackend
+    );
+    const userRegPath = path.join(WORKSPACE_DIR, 'prefixes', targetApp.prefixId, 'user.reg');
+    const registry = parseUserReg(targetApp.prefixId, fs.readFileSync(userRegPath, 'utf8'));
+    const overrideDeviceId = (req.body as { deviceProfileId?: string } | undefined)?.deviceProfileId;
+    const device = DEVICE_PROFILES.find(
+      (d) => d.id === (overrideDeviceId || currentState.deviceProfileId)
+    );
+
+    const report = evaluateAppPreflight({
+      app: targetApp,
+      prefix,
+      registry,
+      device,
+      globalConfig: currentState.globalConfig,
+    });
+    res.json(report);
+  });
+
+  // 6. Real .wrplugin ZIP Archive Parser, Script Server & Execution Logs
   app.post('/api/plugins/upload', upload.single('plugin'), async (req: Request, res: Response) => {
     try {
       if (!req.file) {
@@ -465,6 +762,9 @@ async function startServer() {
         }
       }
 
+      const mainScriptName = String(manifest.mainScript || 'main.js');
+      const mainScriptFile = zip.file(mainScriptName);
+      const scriptPreview = mainScriptFile ? await mainScriptFile.async('string') : undefined;
       const readmeFile = zip.file(String(manifest.readme || 'README.md'));
       const readme = readmeFile ? await readmeFile.async('string') : undefined;
 
@@ -479,7 +779,7 @@ async function startServer() {
           manifest.scriptLanguage === 'python' || manifest.scriptLanguage === 'java'
             ? manifest.scriptLanguage
             : 'javascript',
-        mainScript: String(manifest.mainScript || 'main.js'),
+        mainScript: mainScriptName,
         apiVersion: String(manifest.apiVersion || 'wphone.frontend@1.0'),
         permissions: Array.isArray(manifest.permissions)
           ? manifest.permissions.map(String)
@@ -492,6 +792,7 @@ async function startServer() {
         installedAt: new Date().toISOString().slice(0, 10),
         readme,
         accentColor: typeof manifest.accentColor === 'string' ? manifest.accentColor : '#0284C7',
+        scriptPreview,
       };
 
       res.json({ ok: true, plugin: pluginRecord });
@@ -502,6 +803,59 @@ async function startServer() {
     }
   });
 
+  app.get('/api/plugins/:id/script', (req: Request, res: Response) => {
+    const pluginId = String(req.params.id);
+    const plugin = currentState.plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: 'Plugin not found' });
+      return;
+    }
+    const scriptPath = path.join(WORKSPACE_DIR, 'plugins', pluginId, plugin.mainScript || 'main.js');
+    if (fs.existsSync(scriptPath)) {
+      res.json({
+        pluginId,
+        mainScript: plugin.mainScript,
+        scriptLanguage: plugin.scriptLanguage,
+        content: fs.readFileSync(scriptPath, 'utf8'),
+      });
+      return;
+    }
+    const fallbackContent =
+      plugin.scriptPreview ||
+      INITIAL_PLUGINS.find((bp) => bp.id === pluginId)?.scriptPreview ||
+      '';
+    res.json({
+      pluginId,
+      mainScript: plugin.mainScript,
+      scriptLanguage: plugin.scriptLanguage,
+      content: fallbackContent,
+    });
+  });
+
+  app.put('/api/plugins/:id/script', (req: Request, res: Response) => {
+    const pluginId = String(req.params.id);
+    const plugin = currentState.plugins.find((p) => p.id === pluginId);
+    if (!plugin) {
+      res.status(404).json({ error: 'Plugin not found' });
+      return;
+    }
+    const { content } = req.body as { content: string };
+    const plDir = path.join(WORKSPACE_DIR, 'plugins', pluginId);
+    fs.mkdirSync(plDir, { recursive: true });
+    fs.writeFileSync(path.join(plDir, plugin.mainScript || 'main.js'), content ?? '', 'utf8');
+    plugin.scriptPreview = content ?? '';
+    saveState(currentState);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/plugins/:id/logs', (req: Request, res: Response) => {
+    const pluginId = String(req.params.id);
+    const { summary } = req.body as { summary: string };
+    const logLine = `[${new Date().toISOString()}] [${pluginId}] ${summary}\n`;
+    fs.appendFileSync(path.join(WORKSPACE_DIR, 'logs', 'plugin_sandbox.log'), logLine, 'utf8');
+    res.json({ ok: true });
+  });
+
   app.get('/api/plugins/sample-wrplugin', async (_req: Request, res: Response) => {
     const zip = new JSZip();
     const manifest = {
@@ -510,25 +864,25 @@ async function startServer() {
       version: '1.0.0',
       category: 'frontend',
       author: 'WPhone SDK',
-      description: 'Sample .wrplugin package demonstrating root plugin.json and UI accent API.',
+      description: 'Sample .wrplugin package demonstrating root plugin.json and sandboxed UI/Keyboard API.',
       icon: 'icon.png',
       readme: 'README.md',
       mainScript: 'main.js',
       scriptLanguage: 'javascript',
       apiVersion: 'wphone.frontend@1.0',
       dependencies: [],
-      permissions: ['ui.theme.accent'],
+      permissions: ['ui.theme.accent', 'keyboard.preset.register', 'diagnostics.log'],
       accentColor: '#059669',
       compatibility: { minWPhoneVersion: '1.0.0' },
     };
     zip.file('plugin.json', JSON.stringify(manifest, null, 2));
     zip.file(
       'README.md',
-      '# WPhone Emerald Telemetry Accent\n\nUpload this `.wrplugin` archive inside WPhone Admin Panel -> Plugin Manager to test real ZIP manifest verification.\n'
+      '# WPhone Emerald Telemetry Accent\n\nUpload this `.wrplugin` archive inside WPhone Admin Panel -> Plugin Manager and click Run in Sandbox.\n'
     );
     zip.file(
       'main.js',
-      '// Executed via controlled wphone.frontend bridge\nexport function onEnable(api) {\n  api.setAccentColor("#059669");\n}\n'
+      `// Executed inside WPhone isolated Web Worker sandbox\napi.log('info', 'Initializing Emerald Accent .wrplugin');\napi.setAccentColor('#059669');\napi.registerKeyboardPreset({\n  name: 'Emerald Utility Bar',\n  mode: 'desktop',\n  desktopKeys: ['ESC', 'TAB', 'CTRL', 'ALT', 'F1', 'F5', 'F12', 'DEL']\n});\n`
     );
     const buf = await zip.generateAsync({ type: 'nodebuffer' });
     res.setHeader('Content-Type', 'application/zip');
@@ -539,7 +893,11 @@ async function startServer() {
     res.send(buf);
   });
 
-  // 6. Real Android Native Multi-Module Source Explorer & ZIP Export
+  // 7. Git & GitHub Release Status + Android Multi-Module Explorer & ZIP Export
+  app.get('/api/git/status', (_req: Request, res: Response) => {
+    res.json(readGitStatus());
+  });
+
   app.get('/api/android/tree', (_req: Request, res: Response) => {
     const files: Array<{ path: string; size: number }> = [];
     walkFiles(ANDROID_DIR, ANDROID_DIR, files);
@@ -570,14 +928,15 @@ async function startServer() {
     res.send(buf);
   });
 
-  // 7. Full Diagnostic Bundle Export
+  // 8. Full Diagnostic Bundle Export
   app.get('/api/diagnostics/export', (_req: Request, res: Response) => {
     const workspaceFiles: Array<{ path: string; size: number }> = [];
     walkFiles(WORKSPACE_DIR, WORKSPACE_DIR, workspaceFiles);
     const report = {
       exportedAt: new Date().toISOString(),
-      platform: 'WPhone Full-Stack Server + Android Blueprint',
+      platform: 'WPhone Official Release Server + Android 7.0+ (API 24)',
       nodeVersion: process.version,
+      git: readGitStatus(),
       workspaceFilesCount: workspaceFiles.length,
       workspaceFiles,
       state: currentState,
@@ -588,6 +947,13 @@ async function startServer() {
       `attachment; filename="wphone-full-diagnostics-${Date.now()}.json"`
     );
     res.send(JSON.stringify(report, null, 2));
+  });
+
+  // Ensure API errors always return JSON instead of Express HTML stack traces
+  app.use('/api', (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : 'API request failed',
+    });
   });
 
   // Vite Dev Middleware or Static Production Serve
@@ -607,7 +973,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`WPhone Full-Stack Server running on http://0.0.0.0:${PORT}`);
+    console.log(`WPhone Official Server running on http://0.0.0.0:${PORT}`);
   });
 }
 
