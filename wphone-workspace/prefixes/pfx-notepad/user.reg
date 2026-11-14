@@ -1,0 +1,8 @@
+WINE REGISTRY Version 2
+;; Isolated prefix for pfx-notepad
+
+[Software\\Wine\\Drivers]
+"Audio"="pulse"
+
+[Software\\Wine]
+"Version"="win10"

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WPhone</string>
+    <string name="wizard_title">WPhone Initial Setup</string>
+    <string name="wizard_subtitle">Managed Wine WoW64 + Box64 compatibility system with isolated per-app prefixes.</string>
+    <string name="library_title">Windows App Library</string>
+    <string name="admin_title">Admin Panel</string>
+    <string name="launch_app">Launch</string>
+    <string name="terminate_safe">Terminate Safely</string>
+    <string name="warning_prefix_not_sandbox">Wine prefixes isolate app config and DLLs only; they are not OS security sandboxes.</string>
+</resources>

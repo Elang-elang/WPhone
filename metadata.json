@@ -1,0 +1,6 @@
+{
+  "name": "WPhone — Managed Windows Compatibility Platform",
+  "description": "Interactive WPhone Android UI prototype (Setup Wizard, App Library, Core Admin Panel) and 12-document architecture & technical research portal for running Windows x86/x64 apps via Wine WoW64 and Box64.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,10 @@
+{
+  "prefixId": "pfx-librecalc",
+  "appName": "LibreOffice Calc (x86 WoW64)",
+  "winVersion": "win10",
+  "installedDependencies": [
+    "vcrun2019",
+    "corefonts"
+  ],
+  "updatedAt": "2026-11-14T11:49:31.571Z"
+}

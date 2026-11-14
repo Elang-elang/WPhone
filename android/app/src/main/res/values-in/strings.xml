@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WPhone</string>
+    <string name="wizard_title">Penyiapan Awal WPhone</string>
+    <string name="wizard_subtitle">Sistem terkelola Wine WoW64 + Box64 dengan prefix terisolasi per aplikasi.</string>
+    <string name="library_title">Library Aplikasi Windows</string>
+    <string name="admin_title">Admin Panel</string>
+    <string name="launch_app">Jalankan</string>
+    <string name="terminate_safe">Hentikan Aman</string>
+    <string name="warning_prefix_not_sandbox">Wine prefix hanya mengisolasi konfigurasi dan DLL; bukan sandbox keamanan sistem operasi.</string>
+</resources>
