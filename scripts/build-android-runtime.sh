@@ -12,15 +12,57 @@ ANDROID_DIR="$ROOT_DIR/android"
 JNILIBS_DIR="$ANDROID_DIR/app/src/main/jniLibs/arm64-v8a"
 ASSETS_RUNTIME_DIR="$ANDROID_DIR/app/src/main/assets/runtime"
 BUILD_TMP="${RUNNER_TEMP:-/tmp}/wphone-runtime-build"
+ROOTFS="$BUILD_TMP/rootfs"
+
+cleanup_mounts() {
+  for mnt in "$ROOTFS/proc" "$ROOTFS/sys" "$ROOTFS/dev"; do
+    if mountpoint -q "$mnt" 2>/dev/null; then
+      sudo umount -lf "$mnt" || true
+    fi
+  done
+}
+trap cleanup_mounts EXIT
 
 mkdir -p "$JNILIBS_DIR" "$ASSETS_RUNTIME_DIR" "$BUILD_TMP"
 
 echo "==> [1/5] Installing host cross-build dependencies"
+if command -v add-apt-repository >/dev/null 2>&1; then
+  sudo add-apt-repository -y universe >/dev/null 2>&1 || true
+fi
 sudo apt-get update -qq
 sudo apt-get install -y -qq \
   build-essential git cmake make pkg-config python3 curl jq xz-utils file unzip patchelf \
-  gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-  qemu-user-static binfmt-support
+  gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+# Resolve static QEMU ARM64 user emulator cleanly across Ubuntu 22.04 / 24.04 runners
+QEMU_AARCH64=""
+if [ -x /usr/bin/qemu-aarch64-static ]; then
+  QEMU_AARCH64="/usr/bin/qemu-aarch64-static"
+else
+  sudo apt-get install -y -qq qemu-user-static || true
+  if [ -x /usr/bin/qemu-aarch64-static ]; then
+    QEMU_AARCH64="/usr/bin/qemu-aarch64-static"
+  elif command -v docker >/dev/null 2>&1; then
+    echo "Extracting static qemu-aarch64 binary from tonistiigi/binfmt:latest..."
+    CID="$(docker create tonistiigi/binfmt:latest)"
+    if docker cp "$CID:/usr/bin/qemu-aarch64" "$BUILD_TMP/qemu-aarch64-static" 2>/dev/null || \
+       docker cp "$CID:/usr/bin/qemu-aarch64-static" "$BUILD_TMP/qemu-aarch64-static" 2>/dev/null; then
+      chmod 0755 "$BUILD_TMP/qemu-aarch64-static"
+      QEMU_AARCH64="$BUILD_TMP/qemu-aarch64-static"
+    fi
+    docker rm -f "$CID" >/dev/null 2>&1 || true
+  fi
+fi
+
+if [ -z "$QEMU_AARCH64" ] || [ ! -x "$QEMU_AARCH64" ]; then
+  echo "ERROR: Could not provision static qemu-aarch64 emulator for ARM64 chroot." >&2
+  exit 1
+fi
+QEMU_FILE_INFO="$(file -b "$QEMU_AARCH64")"
+echo "Using QEMU ARM64 emulator: $QEMU_AARCH64 ($QEMU_FILE_INFO)"
+if ! echo "$QEMU_FILE_INFO" | grep -qi "static"; then
+  echo "WARNING: $QEMU_AARCH64 is not statically linked; relying on binfmt_misc F-flag." >&2
+fi
 
 NDK_HOME="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
 if [ -z "$NDK_HOME" ] && [ -n "${ANDROID_HOME:-}" ]; then
@@ -33,12 +75,8 @@ fi
 echo "Using Android NDK: $NDK_HOME"
 
 echo "==> [2/5] Preparing Android Bionic PRoot (libproot.so + loader) for arm64-v8a (API 24+)"
-PROOT_OUT="$BUILD_TMP/proot-out"
-mkdir -p "$PROOT_OUT"
-
 if git clone --depth 1 https://github.com/green-green-avk/build-proot-android.git "$BUILD_TMP/build-proot-android"; then
   pushd "$BUILD_TMP/build-proot-android" >/dev/null
-  # Configure for NDK r27 & API 24 arm64-v8a
   if [ -f config ]; then
     sed -i "s|^NDK=.*|NDK=\"$NDK_HOME\"|" config || true
     sed -i "s|^ARCHS=.*|ARCHS=\"arm64-v8a\"|" config || true
@@ -108,7 +146,6 @@ file box64
 popd >/dev/null
 
 echo "==> [4/5] Bootstrapping Ubuntu 24.04 ARM64 Rootfs + Wine WoW64"
-ROOTFS="$BUILD_TMP/rootfs"
 mkdir -p "$ROOTFS"
 
 UBUNTU_BASE_INDEX="https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/"
@@ -121,14 +158,20 @@ echo "Downloading $UBUNTU_BASE_INDEX$UBUNTU_TAR ..."
 curl -fsSL "$UBUNTU_BASE_INDEX$UBUNTU_TAR" -o "$BUILD_TMP/$UBUNTU_TAR"
 sudo tar -xzf "$BUILD_TMP/$UBUNTU_TAR" -C "$ROOTFS"
 
-sudo cp /usr/bin/qemu-aarch64-static "$ROOTFS/usr/bin/"
+sudo cp "$QEMU_AARCH64" "$ROOTFS/usr/bin/qemu-aarch64-static"
+sudo chmod 0755 "$ROOTFS/usr/bin/qemu-aarch64-static"
+sudo chmod 1777 "$ROOTFS/tmp"
 echo "nameserver 8.8.8.8" | sudo tee "$ROOTFS/etc/resolv.conf" >/dev/null
+
+sudo mount --bind /dev "$ROOTFS/dev"
+sudo mount --bind /proc "$ROOTFS/proc"
+sudo mount --bind /sys "$ROOTFS/sys"
 
 sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash -c "
   set -e
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y --no-install-recommends -qq \
+  apt-get update -o APT::Sandbox::User=root -qq
+  apt-get install -o APT::Sandbox::User=root -y --no-install-recommends -qq \
     ca-certificates dash bash coreutils \
     libx11-6 libxext6 libxrender1 libxrandr2 libxcursor1 libxi6 libxfixes3 libxinerama1 \
     libgl1 libegl1 libgles2 libgl1-mesa-dri libfreetype6 libfontconfig1 \
@@ -136,6 +179,8 @@ sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash -c "
   apt-get clean
   rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*
 "
+
+cleanup_mounts
 sudo rm -f "$ROOTFS/usr/bin/qemu-aarch64-static"
 
 # Install Box64 inside rootfs
@@ -154,7 +199,6 @@ curl -fsSL "$WINE_URL" -o "$BUILD_TMP/wine-wow64.tar.xz"
 
 sudo mkdir -p "$ROOTFS/opt/wine"
 sudo tar -xJf "$BUILD_TMP/wine-wow64.tar.xz" -C "$ROOTFS/opt/wine" --strip-components=1
-# Trim unused header/man files to keep APK leaner while keeping all PE/DLL/bin assets intact
 sudo rm -rf "$ROOTFS/opt/wine/include" "$ROOTFS/opt/wine/share/man" || true
 
 if [ ! -f "$ROOTFS/opt/wine/bin/wine64" ] && [ -f "$ROOTFS/opt/wine/bin/wine" ]; then
@@ -171,7 +215,7 @@ ARCHIVE_BYTES="$(stat -c%s "$OUT_TAR")"
 
 cat > "$ASSETS_RUNTIME_DIR/runtime-manifest.json" <<EOF
 {
-  "bundleVersion": "${WINE_TAG:-1.0.2}",
+  "bundleVersion": "${WINE_TAG:-1.1.0}",
   "architecture": "arm64-v8a",
   "rootfsAsset": "runtime/wphone-rootfs-arm64.tar.xz",
   "wineTag": "${WINE_TAG:-kron4ek-wow64}",
@@ -184,5 +228,4 @@ EOF
 echo "Bundled runtime archive ready: $OUT_TAR ($((ARCHIVE_BYTES / 1024 / 1024)) MB)"
 ls -lh "$JNILIBS_DIR" "$ASSETS_RUNTIME_DIR"
 
-# Free temporary build files so Gradle has maximum disk space
 sudo rm -rf "$BUILD_TMP"
