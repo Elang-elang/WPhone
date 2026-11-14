@@ -18,4 +18,5 @@ android/**/build/
 android/app/src/main/assets/runtime/*.tar.xz
 android/app/src/main/assets/runtime/runtime-manifest.json
 android/app/src/main/jniLibs/**/*.so
+public/assets/aistudio/
 

@@ -161,25 +161,47 @@ sudo tar -xzf "$BUILD_TMP/$UBUNTU_TAR" -C "$ROOTFS"
 sudo cp "$QEMU_AARCH64" "$ROOTFS/usr/bin/qemu-aarch64-static"
 sudo chmod 0755 "$ROOTFS/usr/bin/qemu-aarch64-static"
 sudo chmod 1777 "$ROOTFS/tmp"
-echo "nameserver 8.8.8.8" | sudo tee "$ROOTFS/etc/resolv.conf" >/dev/null
+sudo rm -f "$ROOTFS/etc/resolv.conf"
+printf "nameserver 8.8.8.8\nnameserver 1.1.1.1\n" | sudo tee "$ROOTFS/etc/resolv.conf" >/dev/null
 
 sudo mount --bind /dev "$ROOTFS/dev"
 sudo mount --bind /proc "$ROOTFS/proc"
 sudo mount --bind /sys "$ROOTFS/sys"
 
-sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash -c "
-  set -e
-  export DEBIAN_FRONTEND=noninteractive
-  apt-get update -o APT::Sandbox::User=root -qq
-  apt-get install -o APT::Sandbox::User=root -y --no-install-recommends -qq \
-    ca-certificates dash bash coreutils \
-    libx11-6 libxext6 libxrender1 libxrandr2 libxcursor1 libxi6 libxfixes3 libxinerama1 \
-    libgl1 libegl1 libgles2 libgl1-mesa-dri libfreetype6 libfontconfig1 \
-    libpulse0 libasound2t64 libgnutls30t64 libdbus-1-3 zlib1g fonts-liberation
-  apt-get clean
-  rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*
-"
+cat <<'CHROOT_SCRIPT' | sudo tee "$ROOTFS/tmp/wphone-setup-rootfs.sh" >/dev/null
+#!/bin/bash
+set -e
+export DEBIAN_FRONTEND=noninteractive
+mkdir -p /var/cache/apt/archives/partial /tmp
+chmod 1777 /tmp
+apt-get update -o APT::Sandbox::User=root -qq
+apt-get install -o APT::Sandbox::User=root -y --no-install-recommends -qq \
+  ca-certificates dash bash coreutils \
+  libx11-6 libxext6 libxrender1 libxrandr2 libxcursor1 libxi6 libxfixes3 libxinerama1 \
+  libgl1 libegl1 libgles2 libgl1-mesa-dri libfreetype6 libfontconfig1 \
+  libpulse0 libasound2t64 libgnutls30t64 libdbus-1-3 zlib1g fonts-liberation
+apt-get clean
+rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*
+CHROOT_SCRIPT
+sudo chmod 0755 "$ROOTFS/tmp/wphone-setup-rootfs.sh"
 
+if sudo chroot "$ROOTFS" /bin/bash -c 'echo ok' 2>/dev/null | grep -qx 'ok'; then
+  echo "Running ARM64 rootfs apt provisioning via kernel binfmt_misc..."
+  sudo chroot "$ROOTFS" /bin/bash /tmp/wphone-setup-rootfs.sh
+elif sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash -c 'echo ok' 2>/dev/null | grep -qx 'ok'; then
+  echo "Running ARM64 rootfs apt provisioning via qemu-aarch64-static..."
+  sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash /tmp/wphone-setup-rootfs.sh
+elif sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash /bin/bash -c 'echo ok' 2>/dev/null | grep -qx 'ok'; then
+  echo "Running ARM64 rootfs apt provisioning via qemu-aarch64-static (preserve-argv0 mode)..."
+  sudo chroot "$ROOTFS" /usr/bin/qemu-aarch64-static /bin/bash /bin/bash /tmp/wphone-setup-rootfs.sh
+else
+  echo "ERROR: Unable to execute ARM64 /bin/bash inside $ROOTFS via binfmt_misc or qemu-aarch64-static." >&2
+  file "$ROOTFS/bin/bash" "$ROOTFS/usr/bin/qemu-aarch64-static" || true
+  ls -la /proc/sys/fs/binfmt_misc || true
+  exit 1
+fi
+
+sudo rm -f "$ROOTFS/tmp/wphone-setup-rootfs.sh"
 cleanup_mounts
 sudo rm -f "$ROOTFS/usr/bin/qemu-aarch64-static"
 
@@ -187,12 +209,20 @@ sudo rm -f "$ROOTFS/usr/bin/qemu-aarch64-static"
 sudo install -m 0755 "$BUILD_TMP/box64-build/box64" "$ROOTFS/usr/local/bin/box64"
 
 # Download latest Kron4ek Wine WoW64 build (contains wine + built-in C:\windows\system32\notepad.exe)
-WINE_API_JSON="$BUILD_TMP/wine-release.json"
-curl -fsSL "https://api.github.com/repos/Kron4ek/Wine-Builds/releases/latest" -o "$WINE_API_JSON"
-WINE_URL="$(jq -r '[.assets[] | select(.name | test("^wine-[0-9].*-amd64-wow64\\.tar\\.xz$"))][0].browser_download_url' "$WINE_API_JSON")"
-WINE_TAG="$(jq -r '.tag_name' "$WINE_API_JSON")"
+WINE_API_JSON="$BUILD_TMP/wine-releases.json"
+AUTH_ARGS=()
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  AUTH_ARGS=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+fi
+curl -fsSL "${AUTH_ARGS[@]}" "https://api.github.com/repos/Kron4ek/Wine-Builds/releases?per_page=10" -o "$WINE_API_JSON"
+WINE_URL="$(jq -r '[.[].assets[] | select(.name | test("^wine-[0-9].*-amd64-wow64\\.tar\\.xz$"))][0].browser_download_url' "$WINE_API_JSON")"
+WINE_TAG="$(jq -r '[.[] | select(.assets | any(.name | test("^wine-[0-9].*-amd64-wow64\\.tar\\.xz$")))] | .[0].tag_name' "$WINE_API_JSON")"
 if [ -z "$WINE_URL" ] || [ "$WINE_URL" = "null" ]; then
-  WINE_URL="$(jq -r '[.assets[] | select(.name | test("amd64-wow64\\.tar\\.xz$"))][0].browser_download_url' "$WINE_API_JSON")"
+  WINE_URL="$(jq -r '[.[].assets[] | select(.name | test("amd64-wow64\\.tar\\.xz$"))][0].browser_download_url' "$WINE_API_JSON")"
+fi
+if [ -z "$WINE_URL" ] || [ "$WINE_URL" = "null" ]; then
+  echo "ERROR: Could not find an amd64-wow64.tar.xz Wine release asset on Kron4ek/Wine-Builds." >&2
+  exit 1
 fi
 echo "Downloading Wine WoW64 ($WINE_TAG): $WINE_URL"
 curl -fsSL "$WINE_URL" -o "$BUILD_TMP/wine-wow64.tar.xz"
