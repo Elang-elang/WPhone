@@ -1,12 +1,13 @@
 package id.wphone
 
 import android.content.Context
+import android.graphics.SurfaceTexture
 import android.os.Handler
 import android.os.Looper
 import android.view.KeyEvent
 import android.view.MotionEvent
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.Surface
+import android.view.TextureView
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -22,7 +23,8 @@ object XKeyMapper {
         "TAB" -> 23
         "CTRL" -> 37
         "ALT" -> 64
-        "SHIFT" -> 50
+        "SHIFT", "LSHIFT" -> 50
+        "WIN", "META", "SUPER" -> 133
         "SPACE" -> 65
         "ENTER", "RETURN" -> 36
         "BACKSPACE" -> 22
@@ -36,6 +38,17 @@ object XKeyMapper {
         "↓", "DOWN" -> 116
         "←", "LEFT" -> 113
         "→", "RIGHT" -> 114
+        "-" -> 20
+        "=" -> 21
+        "[" -> 34
+        "]" -> 35
+        ";" -> 47
+        "'" -> 48
+        "`" -> 49
+        "\\" -> 51
+        "," -> 59
+        "." -> 60
+        "/" -> 61
         "F1" -> 67
         "F2" -> 68
         "F3" -> 69
@@ -75,6 +88,7 @@ object XKeyMapper {
         KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> 37
         KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT -> 64
         KeyEvent.KEYCODE_SHIFT_LEFT, KeyEvent.KEYCODE_SHIFT_RIGHT -> 50
+        KeyEvent.KEYCODE_META_LEFT, KeyEvent.KEYCODE_META_RIGHT -> 133
         KeyEvent.KEYCODE_MINUS -> 20
         KeyEvent.KEYCODE_EQUALS -> 21
         KeyEvent.KEYCODE_LEFT_BRACKET -> 34
@@ -124,14 +138,19 @@ object XKeyMapper {
     }
 }
 
+/**
+ * Uses TextureView (rather than SurfaceView) so Jetpack Compose HUD controls (Exit button, Mini Monitor,
+ * Unified Keyboard, and JoiPlay Gamepad) always composite reliably above the X11 desktop on Android 7.0+.
+ */
 class XServerSurfaceView(
     context: Context,
-    private val fbWidth: Int,
-    private val fbHeight: Int
-) : SurfaceView(context), SurfaceHolder.Callback {
+    private var fbWidth: Int,
+    private var fbHeight: Int
+) : TextureView(context), TextureView.SurfaceTextureListener {
 
     var trackpadMode: Boolean = false
 
+    private var activeSurface: Surface? = null
     private var cursorX: Float = fbWidth / 2f
     private var cursorY: Float = fbHeight / 2f
     private var lastTouchX: Float = 0f
@@ -146,7 +165,6 @@ class XServerSurfaceView(
     private val longPressRunnable = Runnable {
         if (!movedTooFarForTap && !trackpadMode) {
             longPressTriggered = true
-            // Release left hold if any and send Right Click (button 3)
             if (leftButtonPressed) {
                 WPhoneNativeBridge.xserverInjectPointer(cursorX.toInt(), cursorY.toInt(), 1, 2, 0)
                 leftButtonPressed = false
@@ -159,21 +177,42 @@ class XServerSurfaceView(
     init {
         isFocusable = true
         isFocusableInTouchMode = true
-        holder.addCallback(this)
+        isOpaque = true
+        surfaceTextureListener = this
     }
 
-    override fun surfaceCreated(holder: SurfaceHolder) {
-        WPhoneNativeBridge.xserverSetSurface(holder.surface)
+    fun updateVirtualResolution(width: Int, height: Int) {
+        fbWidth = width.coerceAtLeast(320)
+        fbHeight = height.coerceAtLeast(240)
+        cursorX = cursorX.coerceIn(0f, (fbWidth - 1).toFloat())
+        cursorY = cursorY.coerceIn(0f, (fbHeight - 1).toFloat())
     }
 
-    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        WPhoneNativeBridge.xserverSetSurface(holder.surface)
+    fun moveRelativePointer(dx: Float, dy: Float) {
+        cursorX = (cursorX + dx).coerceIn(0f, (fbWidth - 1).toFloat())
+        cursorY = (cursorY + dy).coerceIn(0f, (fbHeight - 1).toFloat())
+        WPhoneNativeBridge.xserverInjectPointer(cursorX.toInt(), cursorY.toInt(), 0, 0, 0)
     }
 
-    override fun surfaceDestroyed(holder: SurfaceHolder) {
+    override fun onSurfaceTextureAvailable(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        activeSurface?.release()
+        activeSurface = Surface(surfaceTexture)
+        WPhoneNativeBridge.xserverSetSurface(activeSurface)
+    }
+
+    override fun onSurfaceTextureSizeChanged(surfaceTexture: SurfaceTexture, width: Int, height: Int) {
+        WPhoneNativeBridge.xserverSetSurface(activeSurface)
+    }
+
+    override fun onSurfaceTextureDestroyed(surfaceTexture: SurfaceTexture): Boolean {
         handler.removeCallbacks(longPressRunnable)
         WPhoneNativeBridge.xserverSetSurface(null)
+        activeSurface?.release()
+        activeSurface = null
+        return true
     }
+
+    override fun onSurfaceTextureUpdated(surfaceTexture: SurfaceTexture) = Unit
 
     override fun onCheckIsTextEditor(): Boolean = true
 
@@ -255,7 +294,6 @@ class XServerSurfaceView(
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
-                // Two-finger tap -> Right Click
                 handler.removeCallbacks(longPressRunnable)
                 if (event.pointerCount == 2) {
                     if (leftButtonPressed) {

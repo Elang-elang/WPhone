@@ -105,7 +105,22 @@ Java_id_wphone_WPhoneNativeBridge_xserverInjectKey(
     wphone::xserver_inject_key(xKeycode, isDown == JNI_TRUE, stateMask);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_id_wphone_WPhoneNativeBridge_xserverResize(
+    JNIEnv* /* env */,
+    jobject /* this */,
+    jint width,
+    jint height
+) {
+    wphone::xserver_resize(width, height);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_id_wphone_WPhoneNativeBridge_xserverGetClientCount(JNIEnv* /* env */, jobject /* this */) {
     return wphone::xserver_get_client_count();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_id_wphone_WPhoneNativeBridge_xserverGetFps(JNIEnv* /* env */, jobject /* this */) {
+    return wphone::xserver_get_fps();
 }

@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 import type { NextFunction, Request, Response } from 'express';
@@ -347,6 +348,32 @@ function readGitStatus(): GitRepoStatus {
   };
 }
 
+let prevCpuSample: { idle: number; total: number } | null = null;
+function sampleHostCpuPercent(): number {
+  const cpus = os.cpus();
+  let idle = 0;
+  let total = 0;
+  for (const cpu of cpus) {
+    idle += cpu.times.idle;
+    total += cpu.times.user + cpu.times.nice + cpu.times.sys + cpu.times.irq + cpu.times.idle;
+  }
+  if (!prevCpuSample) {
+    prevCpuSample = { idle, total };
+    return total > 0 ? Math.max(2, Math.min(100, Math.round(((total - idle) / total) * 100))) : 8;
+  }
+  const diffTotal = Math.max(1, total - prevCpuSample.total);
+  const diffIdle = Math.max(0, idle - prevCpuSample.idle);
+  prevCpuSample = { idle, total };
+  return Math.max(0, Math.min(100, Math.round(((diffTotal - diffIdle) / diffTotal) * 100)));
+}
+
+function measureDirMb(dirPath: string): number {
+  const files: Array<{ path: string; size: number }> = [];
+  walkFiles(dirPath, dirPath, files);
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+  return Math.max(1, Math.round(totalBytes / (1024 * 1024)));
+}
+
 async function startServer() {
   let currentState = ensureWorkspaceSeeded();
   const app = express();
@@ -360,6 +387,125 @@ async function startServer() {
       nodeVersion: process.version,
       releaseMode: true,
     });
+  });
+
+  app.get('/api/telemetry', (_req: Request, res: Response) => {
+    const totalMb = Math.round(os.totalmem() / (1024 * 1024));
+    const freeMb = Math.round(os.freemem() / (1024 * 1024));
+    res.json({
+      cpuPercent: sampleHostCpuPercent(),
+      ramUsedMb: Math.max(0, totalMb - freeMb),
+      ramTotalMb: totalMb,
+      ramFreeMb: freeMb,
+      uptimeSec: Math.round(process.uptime()),
+      activeProcesses: currentState.processes.length,
+      prefixesCount: currentState.prefixes.length,
+      workspaceMb: measureDirMb(WORKSPACE_DIR),
+    });
+  });
+
+  app.post('/api/cmd/exec', (req: Request, res: Response) => {
+    const rawCmd = String((req.body as { command?: string })?.command || '').trim();
+    if (!rawCmd) {
+      res.status(400).json({ exitCode: 1, output: 'Empty command. Type "help" for available commands.' });
+      return;
+    }
+    const tokens = rawCmd.split(/\s+/);
+    const cmd = tokens[0].toLowerCase();
+    const arg1 = tokens[1] || '';
+
+    let exitCode = 0;
+    let output = '';
+
+    if (cmd === 'help') {
+      output = [
+        'WPhone Admin CMD Shell (Distro & Wine Prefix Inspector)',
+        'Commands:',
+        '  help                  Show available commands',
+        '  ver / uname           Show WPhone Wine WoW64 + Box64 & host info',
+        '  dir / ls [vPath]      List workspace directory (e.g. dir /WPhone/prefixes)',
+        '  type / cat <vPath>    Read a workspace config or .reg file',
+        '  reg query <prefixId>  Inspect Wine registry & WINEDLLOVERRIDES',
+        '  ps                    Show active Wine/Box64 processes',
+        '  env                   Show Box64 & Wine runtime environment defaults',
+        '  df                    Show workspace disk allocation',
+        '  logs                  Show recent diagnostic events',
+        '  box64 --version       Show bundled Box64 target metadata',
+        '  wine --version        Show bundled Wine WoW64 target metadata',
+      ].join('\n');
+    } else if (cmd === 'ver' || cmd === 'uname') {
+      output = `WPhone v1.2.0 (Wine 9.21 WoW64 + Box64 0.3.2 ARM64)\nHost Node: ${process.version} · Platform: ${os.platform()} ${os.arch()} · Release: ${os.release()}`;
+    } else if (cmd === 'box64') {
+      output = 'Box64 v0.3.2 ARM64 Dynarec (BOX64_MMAP32=1, SAFEFLAGS=1, STRONGMEM=1, GLIBC_TUNABLES=glibc.pthread.rseq=0)';
+    } else if (cmd === 'wine') {
+      output = 'wine-9.21 (WoW64 ARM64 / x86_64 unified prefix mode, WINEESYNC=0)';
+    } else if (cmd === 'dir' || cmd === 'ls') {
+      const target = arg1 || '/WPhone';
+      const nodes = listDirVirtual(target);
+      if (nodes.length === 0) {
+        output = `Directory "${target}" is empty or does not exist.`;
+      } else {
+        output = nodes
+          .map((n) => `${n.type === 'folder' ? '<DIR>   ' : `${String(n.sizeKb).padStart(5)} KB`}  ${n.modifiedAt}  ${n.path}`)
+          .join('\n');
+      }
+    } else if (cmd === 'type' || cmd === 'cat') {
+      if (!arg1) {
+        exitCode = 1;
+        output = 'Usage: cat /WPhone/config/global_runtime.json';
+      } else {
+        const abs = resolveWorkspacePath(arg1);
+        if (!abs || !fs.existsSync(abs) || fs.statSync(abs).isDirectory()) {
+          exitCode = 1;
+          output = `File not found inside /WPhone workspace: ${arg1}`;
+        } else {
+          output = fs.readFileSync(abs, 'utf8').slice(0, 8192);
+        }
+      }
+    } else if (cmd === 'reg' && arg1.toLowerCase() === 'query') {
+      const pfxId = tokens[2] || currentState.prefixes[0]?.id || 'pfx-notepadpp';
+      const userRegPath = path.join(WORKSPACE_DIR, 'prefixes', pfxId, 'user.reg');
+      if (!fs.existsSync(userRegPath)) {
+        exitCode = 1;
+        output = `Prefix not found: ${pfxId}`;
+      } else {
+        output = fs.readFileSync(userRegPath, 'utf8');
+      }
+    } else if (cmd === 'ps') {
+      output =
+        currentState.processes.length === 0
+          ? 'No active Wine/Box64 processes running.'
+          : currentState.processes
+              .map((p) => `PID ${p.pid} | ${p.appName} | ${p.prefixId} | CPU ${p.cpuPercent}% | RAM ${p.ramMb}MB | ${p.commandLine}`)
+              .join('\n');
+    } else if (cmd === 'env') {
+      output = Object.entries({
+        WINEESYNC: currentState.globalConfig.esyncEnabled ? '1' : '0',
+        WINEMSYNC: '0',
+        BOX64_MMAP32: '1',
+        BOX64_DYNAREC_BIGBLOCK: String(currentState.globalConfig.box64BigBlock),
+        BOX64_DYNAREC_STRONGMEM: String(currentState.globalConfig.box64StrongMem),
+        GLIBC_TUNABLES: 'glibc.pthread.rseq=0',
+        WINEDEBUG: currentState.globalConfig.wineDebug,
+        DXVK_HUD: currentState.globalConfig.dxvkHud,
+      })
+        .map(([k, v]) => `${k}=${v}`)
+        .join('\n');
+    } else if (cmd === 'df') {
+      const totalMb = Math.round(os.totalmem() / (1024 * 1024));
+      const freeMb = Math.round(os.freemem() / (1024 * 1024));
+      output = `Workspace Root: ${WORKSPACE_DIR} (${measureDirMb(WORKSPACE_DIR)} MB)\nPrefixes: ${currentState.prefixes.length} · Host RAM: ${totalMb - freeMb}/${totalMb} MB`;
+    } else if (cmd === 'logs') {
+      output = currentState.logs
+        .slice(0, 15)
+        .map((l) => `[${l.timestamp}] [${l.level}] [${l.module}] ${l.messageEn}`)
+        .join('\n');
+    } else {
+      exitCode = 127;
+      output = `Unknown command "${rawCmd}". Run "help" to list supported WPhone CMD diagnostic commands.`;
+    }
+
+    res.json({ exitCode, output });
   });
 
   // 1. State Sync

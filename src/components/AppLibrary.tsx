@@ -20,6 +20,7 @@ interface AppLibraryProps {
   lang: ResolvedLanguage;
   compactFrame: boolean;
   onLaunchApp: (app: WindowsAppEntry) => void;
+  onToggleSafeMode?: (appId: string) => void;
   onEditApp: (app: WindowsAppEntry) => void;
   onUnregisterApp: (appId: string) => void;
   onOpenAddModal: () => void;
@@ -47,6 +48,7 @@ export const AppLibrary: React.FC<AppLibraryProps> = ({
   lang,
   compactFrame,
   onLaunchApp,
+  onToggleSafeMode,
   onEditApp,
   onUnregisterApp,
   onOpenAddModal,
@@ -200,15 +202,23 @@ export const AppLibrary: React.FC<AppLibraryProps> = ({
                 <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2 tabular-nums">
                   <span>
                     {app.keyboardMode === 'gaming'
-                      ? lang === 'id'
-                        ? 'Keyboard: Gaming Pad'
-                        : 'Keyboard: Gaming Pad'
-                      : lang === 'id'
-                        ? 'Keyboard: Desktop + IME'
-                        : 'Keyboard: Desktop + IME'}
+                      ? 'Input: JoiPlay Gamepad'
+                      : 'Input: Unified PC + QWERTY'}
                   </span>
                   <span>{app.lastRunAt ? app.lastRunAt : t.lastRunNever}</span>
                 </div>
+
+                {onToggleSafeMode && (
+                  <label className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer pt-1">
+                    <span>Box64 Safe Mode (Fix 139)</span>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(app.box64SafeMode)}
+                      onChange={() => onToggleSafeMode(app.id)}
+                      className="h-4 w-4 accent-[#0078D4] rounded"
+                    />
+                  </label>
+                )}
               </div>
 
               {/* Actions */}

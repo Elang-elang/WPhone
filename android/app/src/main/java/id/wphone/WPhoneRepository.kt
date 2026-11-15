@@ -6,6 +6,9 @@ import android.provider.OpenableColumns
 import id.wphone.core.config.DeviceCapabilities
 import id.wphone.core.config.DeviceCapabilityAnalyzer
 import id.wphone.core.config.EasyProfile
+import id.wphone.core.config.InputOverlayPreset
+import id.wphone.core.config.OrientationMode
+import id.wphone.core.config.ThemeMode
 import id.wphone.core.config.WinArch
 import id.wphone.core.config.WindowsAppConfig
 import id.wphone.core.prefix.PeHeaderInspector
@@ -21,6 +24,10 @@ import java.io.File
 data class PersistedAppState(
     val initialized: Boolean = false,
     val selectedProfile: EasyProfile = EasyProfile.LIGHT,
+    val themeMode: ThemeMode = ThemeMode.DARK,
+    val orientationMode: OrientationMode = OrientationMode.DYNAMIC_AUTO,
+    val globalBox64SafeMode: Boolean = false,
+    val inputPreset: InputOverlayPreset = InputOverlayPreset(),
     val apps: List<WindowsAppConfig> = emptyList()
 )
 
@@ -30,7 +37,7 @@ class WPhoneRepository(
     private val prefixManager: PrefixManager,
     private val analyzer: DeviceCapabilityAnalyzer
 ) {
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+    private val json = Json { ignoreUnknownKeys = true; prettyPrint = true; encodeDefaults = true }
     private val stateFile = File(File(wphoneRoot, "config"), "wphone_state.json")
 
     fun loadState(caps: DeviceCapabilities): PersistedAppState {
@@ -38,17 +45,30 @@ class WPhoneRepository(
             runCatching {
                 val loaded = json.decodeFromString<PersistedAppState>(stateFile.readText())
                 val hasBuiltInNotepad = loaded.apps.any { it.id == "wine-notepad" }
-                if (!hasBuiltInNotepad) {
-                    val upgraded = loaded.copy(apps = listOf(builtInWineNotepad(caps)) + loaded.apps)
-                    saveState(upgraded)
-                    return upgraded
+                val upgradedApps = if (!hasBuiltInNotepad) {
+                    listOf(builtInWineNotepad(caps)) + loaded.apps
+                } else {
+                    loaded.apps
                 }
-                return loaded
+                val upgradedPreset = if (loaded.inputPreset.buttons.isEmpty()) {
+                    InputOverlayPreset()
+                } else {
+                    loaded.inputPreset
+                }
+                val upgraded = loaded.copy(apps = upgradedApps, inputPreset = upgradedPreset)
+                if (!hasBuiltInNotepad || loaded.inputPreset.buttons.isEmpty()) {
+                    saveState(upgraded)
+                }
+                return upgraded
             }
         }
         val initial = PersistedAppState(
             initialized = false,
             selectedProfile = caps.recommendedProfile,
+            themeMode = ThemeMode.DARK,
+            orientationMode = OrientationMode.DYNAMIC_AUTO,
+            globalBox64SafeMode = false,
+            inputPreset = InputOverlayPreset(),
             apps = defaultCatalogApps(caps)
         )
         saveState(initial)

@@ -12,48 +12,56 @@ import {
   Trash2,
   Save,
   PackageCheck,
+  RotateCw,
 } from 'lucide-react';
 import {
   DllOverrideMode,
+  GamepadSkin,
   KeyboardMode,
+  KeyboardPresetConfig,
+  OrientationMode,
   PreflightReport,
   ResolvedLanguage,
+  SystemTelemetry,
   WindowsAppEntry,
   WineRegistryState,
 } from '../types/wphone';
-import { DEVICE_PROFILES } from '../data/mockData';
+import { DEVICE_PROFILES, INITIAL_KEYBOARD_PRESETS } from '../data/mockData';
 import { translations } from '../i18n/translations';
 
 interface AppRuntimeOverlayProps {
   app: WindowsAppEntry | null;
   deviceProfileId: string;
+  keyboardPresets?: KeyboardPresetConfig[];
   lang: ResolvedLanguage;
   onTerminate: () => void;
   onRefreshState?: () => void;
 }
 
-const DESKTOP_KEYS = [
+const DEFAULT_DESKTOP_KEYS = [
   'ESC',
   'TAB',
   'CTRL',
   'ALT',
   'SHIFT',
-  'META',
+  'WIN',
   'F1',
   'F2',
   'F5',
   'F11',
   'F12',
-  'HOME',
-  'END',
-  'PGUP',
-  'PGDN',
-  'INS',
   'DEL',
   '←',
   '↑',
   '↓',
   '→',
+];
+
+const QWERTY_ROWS = [
+  ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-'],
+  ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
+  ['A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ';'],
+  ['Z', 'X', 'C', 'V', 'B', 'N', 'M', ',', '.', '/'],
 ];
 
 const OVERRIDE_MODES: DllOverrideMode[] = [
@@ -67,6 +75,7 @@ const OVERRIDE_MODES: DllOverrideMode[] = [
 export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
   app,
   deviceProfileId,
+  keyboardPresets,
   lang,
   onTerminate,
   onRefreshState,
@@ -87,14 +96,17 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
   const [rawText, setRawText] = useState('');
   const [regNotice, setRegNotice] = useState<string | null>(null);
 
-  // Input testbed state
-  const [kbMode, setKbMode] = useState<KeyboardMode>(app?.keyboardMode || 'desktop');
+  // Live GUI & Input Workspace State
+  const [kbMode, setKbMode] = useState<KeyboardMode | 'hidden'>(app?.keyboardMode || 'desktop');
+  const [gamepadSkin, setGamepadSkin] = useState<GamepadSkin>('playstation');
+  const [orientation, setOrientation] = useState<OrientationMode>('landscape');
   const [stickyCtrl, setStickyCtrl] = useState(false);
   const [stickyAlt, setStickyAlt] = useState(false);
   const [stickyShift, setStickyShift] = useState(false);
   const [inputBuffer, setInputBuffer] = useState('');
   const [keyEvents, setKeyEvents] = useState<string[]>([]);
   const [opacity, setOpacity] = useState(88);
+  const [telemetry, setTelemetry] = useState<SystemTelemetry | null>(null);
 
   const loadPreflight = async (appId: string, devId: string) => {
     setLoadingPreflight(true);
@@ -131,7 +143,31 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
     void loadRegistry(app.prefixId);
   }, [app?.id, deviceProfileId]);
 
+  useEffect(() => {
+    if (!app) return;
+    let active = true;
+    const poll = () => {
+      fetch('/api/telemetry')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: SystemTelemetry | null) => {
+          if (active && d) setTelemetry(d);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const id = window.setInterval(poll, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+  }, [app?.id]);
+
   if (!app) return null;
+
+  const activePreset =
+    keyboardPresets?.find((p) => p.mode === (kbMode === 'hidden' ? 'desktop' : kbMode)) ||
+    INITIAL_KEYBOARD_PRESETS[0];
+  const desktopKeys = activePreset.desktopKeys.length ? activePreset.desktopKeys : DEFAULT_DESKTOP_KEYS;
 
   const handleInstallMissingDep = async (depId: string) => {
     const res = await fetch(`/api/prefixes/${encodeURIComponent(app.prefixId)}/deps`, {
@@ -197,18 +233,29 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
   };
 
   const triggerKey = (key: string) => {
-    if (key === 'CTRL') {
+    const upper = key.toUpperCase();
+    if (upper === 'CTRL') {
       setStickyCtrl((v) => !v);
       return;
     }
-    if (key === 'ALT') {
+    if (upper === 'ALT') {
       setStickyAlt((v) => !v);
       return;
     }
-    if (key === 'SHIFT') {
+    if (upper === 'SHIFT') {
       setStickyShift((v) => !v);
       return;
     }
+    if (upper === 'SPACE') {
+      setInputBuffer((prev) => prev + ' ');
+    } else if (upper === 'ENTER') {
+      setInputBuffer((prev) => prev + '\n');
+    } else if (upper === 'BACKSPACE') {
+      setInputBuffer((prev) => prev.slice(0, -1));
+    } else if (key.length === 1 && !stickyCtrl && !stickyAlt) {
+      setInputBuffer((prev) => prev + (stickyShift ? key.toUpperCase() : key.toLowerCase()));
+    }
+
     const combo = [
       stickyCtrl ? 'Ctrl' : null,
       stickyAlt ? 'Alt' : null,
@@ -244,18 +291,9 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
             <div className="inline-flex p-0.5 rounded-lg bg-slate-800 border border-slate-700 text-xs">
               {(
                 [
-                  {
-                    id: 'preflight' as const,
-                    label: lang === 'id' ? 'Preflight & Env' : 'Preflight & Env',
-                  },
-                  {
-                    id: 'registry' as const,
-                    label: lang === 'id' ? 'Registry (.reg) & DLL' : 'Registry (.reg) & DLL',
-                  },
-                  {
-                    id: 'input' as const,
-                    label: lang === 'id' ? 'Uji Input & Layar' : 'Input & Display',
-                  },
+                  { id: 'preflight' as const, label: 'Preflight & Env' },
+                  { id: 'registry' as const, label: 'Registry (.reg) & DLL' },
+                  { id: 'input' as const, label: lang === 'id' ? 'Layar & Input GUI' : 'Input & Display' },
                 ] as const
               ).map((tab) => (
                 <button
@@ -295,7 +333,6 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
 
           {activeTab === 'preflight' && (
             <div className="space-y-4">
-              {/* Target Device Simulator Selector (including Android 7/8/9) */}
               <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-semibold text-slate-300">
@@ -305,9 +342,7 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                   </div>
                   <div className="text-[11px] text-slate-400">
                     {selectedDevice?.isSubAndroid10
-                      ? lang === 'id'
-                        ? `Android ${selectedDevice.androidVersion} (API ${selectedDevice.androidApiLevel}) · Mode Ringan <10 Aktif`
-                        : `Android ${selectedDevice.androidVersion} (API ${selectedDevice.androidApiLevel}) · Sub-Android 10 Light Mode`
+                      ? `Android ${selectedDevice.androidVersion} (API ${selectedDevice.androidApiLevel}) · Sub-Android 10 Light Mode`
                       : `Android ${selectedDevice?.androidVersion || 14} (API ${selectedDevice?.androidApiLevel || 34})`}
                   </div>
                 </div>
@@ -334,7 +369,6 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                 </div>
               ) : (
                 <>
-                  {/* Overall Readiness Banner */}
                   <div
                     className={`p-4 rounded-xl border flex flex-wrap items-center justify-between gap-3 ${
                       preflight.overallStatus === 'ready'
@@ -359,12 +393,8 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                               ? 'Siap Dijalankan di Wine WoW64 + Box64'
                               : 'Ready for Wine WoW64 + Box64'
                             : preflight.overallStatus === 'degraded'
-                              ? lang === 'id'
-                                ? 'Berjalan dengan Catatan / Fallback'
-                                : 'Runnable with Warnings / Fallbacks'
-                              : lang === 'id'
-                                ? 'Melebihi Batas Memori / Prasyarat'
-                                : 'Blocked by Memory or Missing Runtime'}
+                              ? 'Runnable with Warnings / Fallbacks'
+                              : 'Blocked by Memory or Missing Runtime'}
                         </div>
                         <div className="text-xs text-slate-300 font-mono tabular-nums">
                           Est. Container Footprint: ~{preflight.estimatedRamMb} MB RAM
@@ -382,16 +412,13 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0078D4] hover:bg-[#006CBE] text-white text-xs font-semibold"
                           >
                             <PackageCheck className="w-3.5 h-3.5" />
-                            <span>
-                              {lang === 'id' ? `Pasang ${dep}` : `Install ${dep}`}
-                            </span>
+                            <span>{lang === 'id' ? `Pasang ${dep}` : `Install ${dep}`}</span>
                           </button>
                         ))}
                       </div>
                     )}
                   </div>
 
-                  {/* Compatibility Checks Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {preflight.checks.map((chk) => (
                       <div
@@ -417,15 +444,10 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                     ))}
                   </div>
 
-                  {/* Resolved Launch Command & Env */}
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs space-y-2">
                     <div className="flex items-center gap-2 text-sky-400 font-sans font-semibold">
                       <Terminal className="w-4 h-4" />
-                      <span>
-                        {lang === 'id'
-                          ? 'Perintah & Environment Peluncuran Aktual'
-                          : 'Resolved Launch Command & Environment'}
-                      </span>
+                      <span>Resolved Launch Command & Environment</span>
                     </div>
                     <div className="p-2.5 rounded-lg bg-slate-900 border border-slate-800 text-emerald-300 break-all">
                       {preflight.commandLine}
@@ -450,12 +472,10 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                 <div>
                   <div className="text-sm font-semibold text-white flex items-center gap-2">
                     <Wrench className="w-4 h-4 text-sky-400" />
-                    <span>Wine Registry (`user.reg`) · {app.prefixId}</span>
+                    <span>Wine Registry (user.reg) · {app.prefixId}</span>
                   </div>
                   <p className="text-xs text-slate-400">
-                    {lang === 'id'
-                      ? 'Perubahan ditulis langsung ke berkas user.reg di disk dan memengaruhi WINEDLLOVERRIDES.'
-                      : 'Changes persist directly to user.reg on disk and update active WINEDLLOVERRIDES.'}
+                    Changes persist directly to user.reg on disk and update active WINEDLLOVERRIDES.
                   </p>
                 </div>
 
@@ -465,13 +485,7 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                     onClick={() => setRawMode((v) => !v)}
                     className="px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-200 hover:bg-slate-800"
                   >
-                    {rawMode
-                      ? lang === 'id'
-                        ? 'Editor Terstruktur'
-                        : 'Structured Editor'
-                      : lang === 'id'
-                        ? 'Edit user.reg Mentah'
-                        : 'Edit Raw user.reg'}
+                    {rawMode ? 'Structured Editor' : 'Edit Raw user.reg'}
                   </button>
                   <button
                     type="button"
@@ -479,7 +493,7 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0078D4] hover:bg-[#006CBE] text-white text-xs font-semibold"
                   >
                     <Save className="w-3.5 h-3.5" />
-                    <span>{lang === 'id' ? 'Simpan user.reg' : 'Save user.reg'}</span>
+                    <span>Save user.reg</span>
                   </button>
                 </div>
               </div>
@@ -561,12 +575,10 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                     </div>
                   </div>
 
-                  {/* DLL Overrides Manager */}
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
                     <div className="text-xs font-semibold text-white">
                       WINEDLLOVERRIDES ([Software\Wine\DllOverrides])
                     </div>
-
                     <div className="flex flex-wrap gap-2">
                       <input
                         type="text"
@@ -592,10 +604,9 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                         className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-white"
                       >
                         <Plus className="w-3.5 h-3.5" />
-                        <span>{lang === 'id' ? 'Tambah' : 'Add'}</span>
+                        <span>Add</span>
                       </button>
                     </div>
-
                     <div className="divide-y divide-slate-800">
                       {Object.entries(registry.dllOverrides).length === 0 ? (
                         <div className="py-3 text-xs text-slate-500">
@@ -652,27 +663,73 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
 
           {activeTab === 'input' && (
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="inline-flex p-0.5 rounded-lg bg-slate-800 border border-slate-700 text-xs">
+              {/* Controls Bar */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex p-0.5 rounded-lg bg-slate-800 border border-slate-700 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setKbMode('hidden')}
+                      className={`px-2.5 py-1.5 rounded-md font-medium ${
+                        kbMode === 'hidden' ? 'bg-[#0078D4] text-white' : 'text-slate-300'
+                      }`}
+                    >
+                      Off
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKbMode('desktop')}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md font-medium ${
+                        kbMode === 'desktop' ? 'bg-[#0078D4] text-white' : 'text-slate-300'
+                      }`}
+                    >
+                      <Keyboard className="w-3.5 h-3.5" />
+                      <span>Unified QWERTY</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKbMode('gaming')}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md font-medium ${
+                        kbMode === 'gaming' ? 'bg-[#0078D4] text-white' : 'text-slate-300'
+                      }`}
+                    >
+                      <Gamepad2 className="w-3.5 h-3.5" />
+                      <span>JoiPlay Pad</span>
+                    </button>
+                  </div>
+
+                  {kbMode === 'gaming' && (
+                    <div className="inline-flex p-0.5 rounded-lg bg-slate-800 border border-slate-700 text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setGamepadSkin('playstation')}
+                        className={`px-2.5 py-1.5 rounded-md font-medium ${
+                          gamepadSkin === 'playstation' ? 'bg-sky-600 text-white' : 'text-slate-300'
+                        }`}
+                      >
+                        PS (△○×□)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setGamepadSkin('nintendo')}
+                        className={`px-2.5 py-1.5 rounded-md font-medium ${
+                          gamepadSkin === 'nintendo' ? 'bg-sky-600 text-white' : 'text-slate-300'
+                        }`}
+                      >
+                        Nintendo (XABY)
+                      </button>
+                    </div>
+                  )}
+
                   <button
                     type="button"
-                    onClick={() => setKbMode('desktop')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium ${
-                      kbMode === 'desktop' ? 'bg-[#0078D4] text-white' : 'text-slate-300'
-                    }`}
+                    onClick={() =>
+                      setOrientation((o) => (o === 'landscape' ? 'portrait' : 'landscape'))
+                    }
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs font-medium text-slate-200 hover:bg-slate-700"
                   >
-                    <Keyboard className="w-3.5 h-3.5" />
-                    <span>{t.desktopKb}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setKbMode('gaming')}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md font-medium ${
-                      kbMode === 'gaming' ? 'bg-[#0078D4] text-white' : 'text-slate-300'
-                    }`}
-                  >
-                    <Gamepad2 className="w-3.5 h-3.5" />
-                    <span>{t.gamingKb}</span>
+                    <RotateCw className="w-3.5 h-3.5 text-sky-400" />
+                    <span>{orientation === 'landscape' ? 'Landscape (1280×720)' : 'Portrait (720×1280)'}</span>
                   </button>
                 </div>
 
@@ -690,115 +747,228 @@ export const AppRuntimeOverlay: React.FC<AppRuntimeOverlayProps> = ({
                 </label>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
-                <label className="block text-xs font-medium text-slate-300">{t.textInputLabel}</label>
-                <input
-                  type="text"
-                  value={inputBuffer}
-                  onChange={(e) => setInputBuffer(e.target.value)}
-                  placeholder={t.textPlaceholder}
-                  className="w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:ring-2 focus:ring-[#0078D4]"
-                />
-                {keyEvents.length > 0 && (
-                  <div className="flex flex-wrap gap-2 text-xs font-mono">
-                    {keyEvents.map((ev, idx) => (
-                      <span
-                        key={`${ev}-${idx}`}
-                        className="px-2 py-0.5 rounded bg-slate-800 text-sky-300 border border-slate-700"
-                      >
-                        {ev}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
+              {/* Simulated In-App X11 Viewport with Mini Monitor HUD + Exit Button + Overlays */}
               <div
-                style={{ opacity: opacity / 100 }}
-                className="p-3 bg-slate-950 rounded-xl border border-slate-800"
+                className={`mx-auto rounded-2xl border border-slate-700 bg-[#071122] relative overflow-hidden flex flex-col justify-between transition-all ${
+                  orientation === 'landscape' ? 'w-full min-h-[380px]' : 'w-full max-w-[360px] min-h-[480px]'
+                }`}
               >
-                {kbMode === 'desktop' ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {DESKTOP_KEYS.map((k) => {
-                      const active =
-                        (k === 'CTRL' && stickyCtrl) ||
-                        (k === 'ALT' && stickyAlt) ||
-                        (k === 'SHIFT' && stickyShift);
-                      return (
+                {/* Top-Right Mini Telemetry Monitor + Red Exit App Button */}
+                <div className="p-2.5 flex items-center justify-end gap-2 z-10">
+                  <div className="px-2.5 py-1 rounded-md bg-slate-950/90 border border-slate-700 font-mono text-[11px] text-sky-400 tabular-nums">
+                    CPU {telemetry?.cpuPercent ?? 8}% · {telemetry?.ramUsedMb ?? 420}MB · 60FPS
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onTerminate}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-red-600 hover:bg-red-500 text-white text-[11px] font-semibold"
+                  >
+                    <Power className="w-3 h-3" />
+                    <span>Exit App</span>
+                  </button>
+                </div>
+
+                {/* Simulated Wine Notepad Window */}
+                <div className="px-4 py-2 flex-1 flex items-center justify-center">
+                  <div className="w-full max-w-2xl rounded-lg border border-slate-600 bg-slate-900/95 shadow-xl overflow-hidden">
+                    <div className="px-3 py-1.5 bg-slate-950 border-b border-slate-700 flex items-center justify-between text-xs text-slate-200">
+                      <span>{app.name} — X11 Workspace ({orientation === 'landscape' ? '1280×720' : '720×1280'})</span>
+                      <span className="font-mono text-slate-400">─ □ ✕</span>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={inputBuffer}
+                      onChange={(e) => setInputBuffer(e.target.value)}
+                      placeholder={t.textPlaceholder}
+                      className="w-full p-3 bg-slate-900 text-slate-100 font-mono text-xs focus:outline-none"
+                    />
+                    {keyEvents.length > 0 && (
+                      <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800 flex flex-wrap gap-1.5 text-[11px] font-mono">
+                        {keyEvents.map((ev, idx) => (
+                          <span key={`${ev}-${idx}`} className="px-2 py-0.5 rounded bg-slate-800 text-sky-300">
+                            {ev}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bottom Overlay: Unified PC + QWERTY or JoiPlay Gamepad */}
+                {kbMode === 'desktop' && (
+                  <div
+                    style={{ opacity: opacity / 100 }}
+                    className="bg-slate-950/95 border-t border-slate-800 p-2.5 space-y-1.5"
+                  >
+                    <div className="flex flex-wrap gap-1">
+                      {desktopKeys.map((k) => {
+                        const active =
+                          (k === 'CTRL' && stickyCtrl) ||
+                          (k === 'ALT' && stickyAlt) ||
+                          (k === 'SHIFT' && stickyShift);
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            onClick={() => triggerKey(k)}
+                            className={`px-2 py-1 rounded text-[11px] font-mono font-semibold ${
+                              active
+                                ? 'bg-[#0078D4] text-white'
+                                : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700'
+                            }`}
+                          >
+                            {k}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="space-y-1">
+                      {QWERTY_ROWS.map((row, rIdx) => (
+                        <div
+                          key={rIdx}
+                          className="grid gap-1"
+                          style={{ gridTemplateColumns: `repeat(${row.length}, minmax(0, 1fr))` }}
+                        >
+                          {row.map((k) => (
+                            <button
+                              key={k}
+                              type="button"
+                              onClick={() => triggerKey(k)}
+                              className="py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-white"
+                            >
+                              {stickyShift ? k : k.toLowerCase()}
+                            </button>
+                          ))}
+                        </div>
+                      ))}
+                      <div className="grid grid-cols-12 gap-1">
                         <button
-                          key={k}
                           type="button"
-                          onClick={() => triggerKey(k)}
-                          className={`px-2.5 py-2 min-w-[44px] min-h-[40px] rounded-md text-xs font-mono font-semibold transition-colors ${
-                            active
-                              ? 'bg-[#0078D4] text-white'
-                              : 'bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-700'
+                          onClick={() => triggerKey('SHIFT')}
+                          className={`col-span-2 py-1.5 rounded border text-xs font-mono ${
+                            stickyShift ? 'bg-[#0078D4] border-sky-400 text-white' : 'bg-slate-800 border-slate-700 text-slate-200'
                           }`}
                         >
-                          {k}
+                          SHIFT
                         </button>
-                      );
-                    })}
+                        <button
+                          type="button"
+                          onClick={() => triggerKey('SPACE')}
+                          className="col-span-6 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-slate-200"
+                        >
+                          SPACE
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => triggerKey('BACKSPACE')}
+                          className="col-span-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono text-slate-200"
+                        >
+                          ⌫
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => triggerKey('ENTER')}
+                          className="col-span-2 py-1.5 rounded bg-[#0078D4] text-xs font-mono text-white font-semibold"
+                        >
+                          ENTER
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                ) : (
-                  <div className="flex flex-wrap items-center justify-between gap-4 py-2">
-                    <div className="grid grid-cols-3 gap-1.5 w-36">
-                      <div />
-                      <button
-                        type="button"
-                        onClick={() => triggerKey('W / Up')}
-                        className="h-10 rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono"
-                      >
-                        ↑
-                      </button>
-                      <div />
-                      <button
-                        type="button"
-                        onClick={() => triggerKey('A / Left')}
-                        className="h-10 rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono"
-                      >
-                        ←
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => triggerKey('S / Down')}
-                        className="h-10 rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono"
-                      >
-                        ↓
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => triggerKey('D / Right')}
-                        className="h-10 rounded bg-slate-800 hover:bg-slate-700 text-xs font-mono"
-                      >
-                        →
-                      </button>
-                    </div>
+                )}
 
-                    <div className="flex items-center gap-2">
-                      {['SELECT', 'START'].map((btn) => (
-                        <button
-                          key={btn}
-                          type="button"
-                          onClick={() => triggerKey(btn)}
-                          className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-mono"
-                        >
-                          {btn}
-                        </button>
-                      ))}
+                {kbMode === 'gaming' && (
+                  <div
+                    style={{ opacity: opacity / 100 }}
+                    className="p-3 bg-slate-950/85 border-t border-slate-800 space-y-2"
+                  >
+                    <div className="flex justify-between px-2">
+                      <div className="flex gap-2">
+                        {['L2', 'L1'].map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => triggerKey(s)}
+                            className="px-3.5 py-1.5 rounded-lg bg-slate-800 border border-slate-600 text-xs font-mono font-bold"
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="flex gap-2">
+                        {['R1', 'R2'].map((s) => (
+                          <button
+                            key={s}
+                            type="button"
+                            onClick={() => triggerKey(s)}
+                            className="px-3.5 py-1.5 rounded-lg bg-slate-800 border border-slate-600 text-xs font-mono font-bold"
+                          >
+                            {s}
+                          </button>
+                        ))}
+                      </div>
                     </div>
+                    <div className="flex flex-wrap items-center justify-between gap-4 px-2">
+                      <div className="grid grid-cols-3 gap-1 w-28">
+                        <div />
+                        <button type="button" onClick={() => triggerKey('UP')} className="h-9 rounded bg-slate-800 border border-slate-600 text-xs font-bold">↑</button>
+                        <div />
+                        <button type="button" onClick={() => triggerKey('LEFT')} className="h-9 rounded bg-slate-800 border border-slate-600 text-xs font-bold">←</button>
+                        <div className="h-9 rounded bg-slate-900" />
+                        <button type="button" onClick={() => triggerKey('RIGHT')} className="h-9 rounded bg-slate-800 border border-slate-600 text-xs font-bold">→</button>
+                        <div />
+                        <button type="button" onClick={() => triggerKey('DOWN')} className="h-9 rounded bg-slate-800 border border-slate-600 text-xs font-bold">↓</button>
+                        <div />
+                      </div>
 
-                    <div className="grid grid-cols-2 gap-2">
-                      {['Y', 'X', 'B', 'A'].map((btn) => (
+                      <div className="flex items-center gap-2">
+                        {['SELECT', 'START'].map((btn) => (
+                          <button
+                            key={btn}
+                            type="button"
+                            onClick={() => triggerKey(btn)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-600 text-[11px] font-mono"
+                          >
+                            {btn}
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-1 w-32 items-center">
+                        <div />
                         <button
-                          key={btn}
                           type="button"
-                          onClick={() => triggerKey(`BTN_${btn}`)}
-                          className="w-11 h-11 rounded-full bg-slate-800 hover:bg-[#0078D4] border border-slate-600 text-xs font-bold"
+                          onClick={() => triggerKey(gamepadSkin === 'playstation' ? '△' : 'X')}
+                          className="h-10 rounded-full bg-slate-800 border border-emerald-400 text-emerald-400 text-sm font-bold"
                         >
-                          {btn}
+                          {gamepadSkin === 'playstation' ? '△' : 'X'}
                         </button>
-                      ))}
+                        <div />
+                        <button
+                          type="button"
+                          onClick={() => triggerKey(gamepadSkin === 'playstation' ? '□' : 'Y')}
+                          className="h-10 rounded-full bg-slate-800 border border-pink-400 text-pink-400 text-sm font-bold"
+                        >
+                          {gamepadSkin === 'playstation' ? '□' : 'Y'}
+                        </button>
+                        <div />
+                        <button
+                          type="button"
+                          onClick={() => triggerKey(gamepadSkin === 'playstation' ? '○' : 'A')}
+                          className="h-10 rounded-full bg-slate-800 border border-rose-400 text-rose-400 text-sm font-bold"
+                        >
+                          {gamepadSkin === 'playstation' ? '○' : 'A'}
+                        </button>
+                        <div />
+                        <button
+                          type="button"
+                          onClick={() => triggerKey(gamepadSkin === 'playstation' ? '×' : 'B')}
+                          className="h-10 rounded-full bg-slate-800 border border-sky-400 text-sky-400 text-sm font-bold"
+                        >
+                          {gamepadSkin === 'playstation' ? '×' : 'B'}
+                        </button>
+                        <div />
+                      </div>
                     </div>
                   </div>
                 )}

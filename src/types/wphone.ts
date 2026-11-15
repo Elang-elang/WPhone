@@ -13,8 +13,21 @@ export type WinArch = 'x64' | 'x86';
 export type GraphicsBackend = 'turnip-dxvk' | 'system-vulkan-dxvk' | 'vkd3d-proton' | 'wined3d-virgl';
 export type AudioDriver = 'pulse-aaudio' | 'pulse-opensl' | 'alsa-null';
 export type KeyboardMode = 'desktop' | 'gaming';
+export type GamepadSkin = 'playstation' | 'nintendo';
+export type OrientationMode = 'dynamic-auto' | 'landscape' | 'portrait';
 
 export type DllOverrideMode = 'native,builtin' | 'builtin,native' | 'native' | 'builtin' | 'disabled';
+
+export interface SystemTelemetry {
+  cpuPercent: number;
+  ramUsedMb: number;
+  ramTotalMb: number;
+  ramFreeMb: number;
+  uptimeSec: number;
+  activeProcesses: number;
+  prefixesCount: number;
+  workspaceMb: number;
+}
 
 export type VerificationStatus =
   | 'verified'
@@ -99,6 +112,7 @@ export interface WindowsAppEntry {
   envVars: Record<string, string>;
   keyboardMode: KeyboardMode;
   keyboardPreset: string;
+  box64SafeMode?: boolean;
   dependencies: string[];
   lastRunAt: string | null;
   sourceMethod: 'installer' | 'import' | 'shortcut' | 'builtin';
@@ -249,6 +263,8 @@ export interface KeyboardPresetConfig {
   id: string;
   name: string;
   mode: KeyboardMode;
+  gamepadSkin?: GamepadSkin;
+  qwertyEnabled?: boolean;
   opacity: number;
   desktopKeys: string[];
   stickyModifiers: boolean;

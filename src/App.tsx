@@ -77,11 +77,11 @@ export default function App() {
   const [themePref, setThemePref] = useState<ThemePreference>(() => {
     try {
       const saved = localStorage.getItem(PREF_KEY);
-      if (saved) return (JSON.parse(saved).themePref as ThemePreference) || 'auto';
+      if (saved) return (JSON.parse(saved).themePref as ThemePreference) || 'dark';
     } catch {
       // ignore
     }
-    return 'auto';
+    return 'dark';
   });
 
   const [viewportMode, setViewportMode] = useState<DeviceViewportMode>('expanded');
@@ -643,6 +643,14 @@ export default function App() {
         lang={resolvedLang}
         compactFrame={compact}
         onLaunchApp={handleLaunchApp}
+        onToggleSafeMode={(appId) =>
+          setSystemState((prev) => ({
+            ...prev,
+            apps: prev.apps.map((a) =>
+              a.id === appId ? { ...a, box64SafeMode: !a.box64SafeMode } : a
+            ),
+          }))
+        }
         onEditApp={(app) => {
           setEditingApp(app);
           setAddModalOpen(true);
@@ -941,6 +949,7 @@ export default function App() {
       <AppRuntimeOverlay
         app={runningApp}
         deviceProfileId={systemState.deviceProfileId}
+        keyboardPresets={systemState.keyboardPresets}
         lang={resolvedLang}
         onTerminate={handleTerminateApp}
         onRefreshState={() => {

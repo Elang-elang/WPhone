@@ -1,7 +1,9 @@
 package id.wphone.core.runtime
 
+import android.app.ActivityManager
 import android.content.Context
 import android.net.Uri
+import android.os.StatFs
 import android.system.Os
 import id.wphone.core.config.AudioBackend
 import id.wphone.core.config.DeviceCapabilities
@@ -37,6 +39,70 @@ data class RuntimeInstallStatus(
     val hasBox64Binary: Boolean,
     val bundleSummary: String
 )
+
+data class LiveSystemTelemetry(
+    val cpuPercent: Int,
+    val ramUsedMb: Long,
+    val ramTotalMb: Long,
+    val ramFreeMb: Long,
+    val storageFreeGb: Double,
+    val storageTotalGb: Double
+)
+
+object SystemTelemetryReader {
+    private var prevIdle = -1L
+    private var prevTotal = -1L
+
+    fun read(context: Context): LiveSystemTelemetry {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val mi = ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        val totalRamMb = (mi.totalMem / (1024L * 1024L)).coerceAtLeast(1L)
+        val availRamMb = (mi.availMem / (1024L * 1024L)).coerceIn(0L, totalRamMb)
+        val usedRamMb = (totalRamMb - availRamMb).coerceAtLeast(0L)
+
+        val stat = StatFs(context.filesDir.absolutePath)
+        val freeGb = (stat.availableBlocksLong * stat.blockSizeLong) / (1024.0 * 1024.0 * 1024.0)
+        val totalGb = (stat.blockCountLong * stat.blockSizeLong) / (1024.0 * 1024.0 * 1024.0)
+
+        val cpuPercent = sampleCpuPercent()
+        return LiveSystemTelemetry(
+            cpuPercent = cpuPercent,
+            ramUsedMb = usedRamMb,
+            ramTotalMb = totalRamMb,
+            ramFreeMb = availRamMb,
+            storageFreeGb = freeGb,
+            storageTotalGb = totalGb
+        )
+    }
+
+    private fun sampleCpuPercent(): Int {
+        return runCatching {
+            val line = File("/proc/stat").bufferedReader().use { it.readLine() } ?: return 0
+            val parts = line.trim().split(Regex("\\s+"))
+            if (parts.size < 5) return 0
+            val user = parts[1].toLongOrNull() ?: 0L
+            val nice = parts[2].toLongOrNull() ?: 0L
+            val sys = parts[3].toLongOrNull() ?: 0L
+            val idle = parts[4].toLongOrNull() ?: 0L
+            val iowait = parts.getOrNull(5)?.toLongOrNull() ?: 0L
+            val irq = parts.getOrNull(6)?.toLongOrNull() ?: 0L
+            val softirq = parts.getOrNull(7)?.toLongOrNull() ?: 0L
+            val total = user + nice + sys + idle + iowait + irq + softirq
+
+            if (prevTotal < 0L) {
+                prevTotal = total
+                prevIdle = idle
+                return ((1.0 - (idle.toDouble() / total.coerceAtLeast(1L))) * 100.0).toInt().coerceIn(2, 100)
+            }
+            val diffTotal = (total - prevTotal).coerceAtLeast(1L)
+            val diffIdle = (idle - prevIdle).coerceAtLeast(0L)
+            prevTotal = total
+            prevIdle = idle
+            (((diffTotal - diffIdle).toDouble() / diffTotal.toDouble()) * 100.0).toInt().coerceIn(0, 100)
+        }.getOrDefault(12)
+    }
+}
 
 class RuntimeManager(private val wphoneRoot: File) {
 
@@ -230,7 +296,7 @@ class RuntimeManager(private val wphoneRoot: File) {
         val apiConn = (URL("https://api.github.com/repos/notepad-plus-plus/notepad-plus-plus/releases/latest")
             .openConnection() as HttpURLConnection).apply {
             setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "WPhone-Android/1.1")
+            setRequestProperty("User-Agent", "WPhone-Android/1.2")
             connectTimeout = 15_000
             readTimeout = 20_000
         }
@@ -243,7 +309,7 @@ class RuntimeManager(private val wphoneRoot: File) {
         val zipFile = File(importsDir, "npp-portable-x64.zip")
 
         val dlConn = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
-            setRequestProperty("User-Agent", "WPhone-Android/1.1")
+            setRequestProperty("User-Agent", "WPhone-Android/1.2")
             connectTimeout = 15_000
             readTimeout = 30_000
         }
@@ -343,30 +409,39 @@ class WineWoW64Launcher(
     fun buildEnvironment(
         app: WindowsAppConfig,
         caps: DeviceCapabilities? = null,
-        registryOverrides: String = ""
+        registryOverrides: String = "",
+        globalSafeMode: Boolean = false
     ): Map<String, String> {
         val budget = caps?.memoryBudget
-        val useLegacyBudget = budget?.isSubAndroid10 == true || budget?.isLowRamMode == true
+        val safeDynarec = globalSafeMode || app.box64SafeMode
 
         val env = linkedMapOf(
             "WINEPREFIX" to "/opt/wphone_prefixes/${app.prefixId}",
-            "WINEESYNC" to if (budget?.enableEsync == false) "0" else "1",
-            "WINEDEBUG" to "-all",
-            "BOX64_LOG" to "0",
-            "BOX64_DYNAREC_BIGBLOCK" to (budget?.box64BigBlock?.toString() ?: "1"),
-            "BOX64_DYNAREC_STRONGMEM" to if (useLegacyBudget) "0" else "1",
+            "WINESERVER" to "/opt/wine/bin/wineserver",
+            "WINEARCH" to if (app.arch.name == "X86") "win32" else "win64",
+            "WINEESYNC" to "0",
+            "WINEMSYNC" to "0",
+            "WINEDEBUG" to "-all,err+module",
+            // Prevent Ubuntu 24.04 glibc 2.39 rseq SIGSEGV (exit 139) on older Android kernels
+            "GLIBC_TUNABLES" to "glibc.pthread.rseq=0",
+            "BOX64_LOG" to "1",
+            "BOX64_NOBANNER" to "0",
+            "BOX64_MMAP32" to "1",
+            "BOX64_DYNAREC" to if (safeDynarec) "0" else "1",
+            "BOX64_DYNAREC_SAFEFLAGS" to "1",
+            "BOX64_DYNAREC_STRONGMEM" to "1",
+            "BOX64_DYNAREC_BIGBLOCK" to if (safeDynarec) "0" else (budget?.box64BigBlock?.toString() ?: "1"),
+            "BOX64_LD_LIBRARY_PATH" to "/opt/wine/lib:/opt/wine/lib/wine/x86_64-unix:/usr/lib/x86_64-linux-gnu",
+            "LD_LIBRARY_PATH" to "/opt/wine/lib:/opt/wine/lib/wine/aarch64-unix:/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu",
             "PULSE_SERVER" to "unix:/tmp/pulse.sock",
             "PULSE_LATENCY_MSEC" to if (app.audioBackend == AudioBackend.PULSE_OPENSL_ES) "60" else "30",
             "DISPLAY" to ":0",
+            "XDG_RUNTIME_DIR" to "/tmp",
             "HOME" to "/root",
             "USER" to "root"
         )
 
-        if (budget?.box64Mmap32 == true) {
-            env["BOX64_MMAP32"] = "1"
-        }
-
-        val baseOverrides = mutableListOf<String>()
+        val baseOverrides = mutableListOf("winemenubuilder.exe=d")
         when (app.graphicsBackend) {
             GraphicsBackend.TURNIP_DXVK -> {
                 env["VK_ICD_FILENAMES"] = "/opt/wphone_runtime/turnip_icd.json"
@@ -402,8 +477,17 @@ class WineWoW64Launcher(
     ): List<String> {
         val escapedExe = app.executablePath.replace("\"", "\\\"")
         val argsPart = if (app.arguments.isNotBlank()) " ${app.arguments}" else ""
-        val wineCmd = "/usr/local/bin/box64 $wineGuestBin explorer /desktop=WPhone,$virtualDesktopSize \"$escapedExe\"$argsPart"
-        return listOf("/bin/sh", "-c", wineCmd)
+        // Wait briefly for X11 unix socket, pre-warm Wine prefix system hives if missing, then launch target
+        val script = buildString {
+            append("i=0; while [ ! -S /tmp/.X11-unix/X0 ] && [ \$i -lt 25 ]; do sleep 0.1; i=\$((i+1)); done; ")
+            append("if [ ! -f \"\$WINEPREFIX/system.reg\" ]; then /usr/local/bin/box64 $wineGuestBin wineboot --init || true; fi; ")
+            if (app.id == "wine-notepad") {
+                append("exec /usr/local/bin/box64 $wineGuestBin explorer /desktop=WPhone,$virtualDesktopSize notepad.exe$argsPart")
+            } else {
+                append("exec /usr/local/bin/box64 $wineGuestBin explorer /desktop=WPhone,$virtualDesktopSize \"$escapedExe\"$argsPart")
+            }
+        }
+        return listOf("/bin/sh", "-c", script)
     }
 }
 
@@ -423,6 +507,7 @@ class WineProcessRunner(
         registryOverrides: String,
         fbWidth: Int,
         fbHeight: Int,
+        globalSafeMode: Boolean = false,
         onLogLine: (String) -> Unit,
         onExit: (Int) -> Unit
     ): Result<Unit> = runCatching {
@@ -445,7 +530,7 @@ class WineProcessRunner(
 
         val wphoneRoot = prefixesDir.parentFile ?: prefixesDir
         val launcher = WineWoW64Launcher(runtimeManager.runtimeDir(), prefixesDir)
-        val wineEnv = launcher.buildEnvironment(app, caps, registryOverrides)
+        val wineEnv = launcher.buildEnvironment(app, caps, registryOverrides, globalSafeMode)
         val guestCmd = launcher.buildCommandLine(
             app = app,
             virtualDesktopSize = "${fbWidth}x${fbHeight}",
@@ -454,11 +539,15 @@ class WineProcessRunner(
 
         val prootArgs = mutableListOf(
             prootBin.absolutePath,
+            "-k", "5.15.0",
             "-r", rootfs.absolutePath,
             "-0",
             "-w", "/root",
             "--link2symlink",
             "-b", "/dev",
+            "-b", "/dev/urandom:/dev/urandom",
+            "-b", "/dev/null:/dev/null",
+            "-b", "/dev/zero:/dev/zero",
             "-b", "/proc",
             "-b", "/sys",
             "-b", "${tmpDir.absolutePath}:/tmp",
@@ -480,7 +569,8 @@ class WineProcessRunner(
         env["PATH"] = "/opt/wine/bin:/usr/local/bin:/usr/bin:/bin"
         env.putAll(wineEnv)
 
-        appendLog("[wphone] Starting PRoot -> Box64 -> Wine WoW64: ${app.executablePath}", onLogLine)
+        val safeLabel = if (globalSafeMode || app.box64SafeMode) " [Box64 SAFE MODE: Dynarec OFF]" else ""
+        appendLog("[wphone] Starting PRoot (-k 5.15.0, rseq=0) -> Box64 -> Wine WoW64$safeLabel: ${app.executablePath}", onLogLine)
         val proc = pb.start()
         activeProcess = proc
 
@@ -518,5 +608,61 @@ class WineProcessRunner(
         runCatching {
             if (proc.isAlive) proc.destroyForcibly()
         }
+    }
+}
+
+class AdminShellRunner(
+    private val context: Context,
+    private val runtimeManager: RuntimeManager,
+    private val prefixesDir: File
+) {
+    fun execute(command: String): Pair<Int, String> = runCatching {
+        val nativeLibDir = context.applicationInfo.nativeLibraryDir
+        val prootBin = File(nativeLibDir, "libproot.so")
+        val rootfs = runtimeManager.rootfsDir()
+        val tmpDir = runtimeManager.tmpDir().apply { mkdirs() }
+        val wphoneRoot = prefixesDir.parentFile ?: prefixesDir
+
+        if (!prootBin.exists() || !rootfs.exists()) {
+            return@runCatching -1 to "[error] PRoot or rootfs not installed yet. Run Setup Wizard or Extract Runtime first."
+        }
+
+        val args = listOf(
+            prootBin.absolutePath,
+            "-k", "5.15.0",
+            "-r", rootfs.absolutePath,
+            "-0",
+            "-w", "/root",
+            "--link2symlink",
+            "-b", "/dev",
+            "-b", "/proc",
+            "-b", "/sys",
+            "-b", "${tmpDir.absolutePath}:/tmp",
+            "-b", "${prefixesDir.absolutePath}:/opt/wphone_prefixes",
+            "-b", "${wphoneRoot.absolutePath}:${wphoneRoot.absolutePath}",
+            "/bin/sh", "-c", command
+        )
+
+        val pb = ProcessBuilder(args)
+        pb.redirectErrorStream(true)
+        val env = pb.environment()
+        env["LD_LIBRARY_PATH"] = nativeLibDir
+        env["PROOT_TMP_DIR"] = tmpDir.absolutePath
+        env["PROOT_NO_SECCOMP"] = "1"
+        val loader = File(nativeLibDir, "libproot-loader.so")
+        if (loader.exists()) env["PROOT_LOADER"] = loader.absolutePath
+        val loader32 = File(nativeLibDir, "libproot-loader32.so")
+        if (loader32.exists()) env["PROOT_LOADER_32"] = loader32.absolutePath
+        env["PATH"] = "/opt/wine/bin:/usr/local/bin:/usr/bin:/bin"
+        env["HOME"] = "/root"
+        env["GLIBC_TUNABLES"] = "glibc.pthread.rseq=0"
+        env["BOX64_MMAP32"] = "1"
+
+        val proc = pb.start()
+        val output = BufferedReader(InputStreamReader(proc.inputStream)).use { it.readText() }
+        val code = proc.waitFor()
+        code to output.ifBlank { "(exit $code, no stdout/stderr)" }
+    }.getOrElse { err ->
+        -1 to "[exception] ${err.message}"
     }
 }

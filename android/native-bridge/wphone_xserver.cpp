@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <mutex>
@@ -76,6 +77,9 @@ std::mutex g_mutex;
 std::atomic<bool> g_running{false};
 std::atomic<bool> g_dirty{false};
 std::atomic<int> g_clientCount{0};
+std::atomic<int> g_fps{0};
+std::atomic<int> g_frameCounter{0};
+auto g_lastFpsTick = std::chrono::steady_clock::now();
 
 int g_listenFd = -1;
 std::string g_socketPath;
@@ -302,6 +306,14 @@ void presentFrameIfDirty() {
             );
         }
         ANativeWindow_unlockAndPost(win);
+        g_frameCounter.fetch_add(1);
+        auto now = std::chrono::steady_clock::now();
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - g_lastFpsTick).count();
+        if (elapsedMs >= 1000) {
+            const int frames = g_frameCounter.exchange(0);
+            g_fps.store(static_cast<int>((frames * 1000LL) / std::max<long long>(1, elapsedMs)));
+            g_lastFpsTick = now;
+        }
     }
 }
 
@@ -1355,6 +1367,31 @@ void xserver_set_surface(ANativeWindow* window) {
     }
 }
 
+void xserver_resize(int width, int height) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const int newW = std::clamp(width, 320, 2560);
+    const int newH = std::clamp(height, 240, 2560);
+    if (newW == g_fbWidth && newH == g_fbHeight) return;
+
+    g_fbWidth = newW;
+    g_fbHeight = newH;
+    g_cursorX = std::clamp(g_cursorX, 0, g_fbWidth - 1);
+    g_cursorY = std::clamp(g_cursorY, 0, g_fbHeight - 1);
+    g_backbuffer.assign(static_cast<size_t>(g_fbWidth) * g_fbHeight, 0x0B1120u);
+
+    auto rootIt = g_drawables.find(ROOT_WINDOW_ID);
+    if (rootIt != g_drawables.end()) {
+        rootIt->second.width = static_cast<uint16_t>(g_fbWidth);
+        rootIt->second.height = static_cast<uint16_t>(g_fbHeight);
+        rootIt->second.pixels.assign(static_cast<size_t>(g_fbWidth) * g_fbHeight, 0x0B1120u);
+    }
+    if (g_window) {
+        ANativeWindow_setBuffersGeometry(g_window, g_fbWidth, g_fbHeight, WINDOW_FORMAT_RGBX_8888);
+    }
+    g_dirty.store(true);
+    XLOGI("Resized embedded X11 framebuffer dynamically to %dx%d", g_fbWidth, g_fbHeight);
+}
+
 void xserver_stop() {
     g_running.store(false);
     if (g_serverThread.joinable()) g_serverThread.join();
@@ -1445,6 +1482,10 @@ void xserver_inject_key(int xKeycode, bool isDown, int stateMask) {
 
 int xserver_get_client_count() {
     return g_clientCount.load();
+}
+
+int xserver_get_fps() {
+    return g_fps.load();
 }
 
 }  // namespace wphone

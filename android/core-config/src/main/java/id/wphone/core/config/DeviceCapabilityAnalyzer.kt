@@ -20,6 +20,68 @@ enum class AudioBackend { PULSE_OPENSL_ES, PULSE_AAUDIO, ALSA_NULL }
 enum class WinArch { X86, X64 }
 
 @Serializable
+enum class ThemeMode { DARK, LIGHT, SYSTEM }
+
+@Serializable
+enum class OrientationMode { DYNAMIC_AUTO, LANDSCAPE, PORTRAIT }
+
+@Serializable
+enum class GamepadSkin { PLAYSTATION, NINTENDO }
+
+@Serializable
+enum class OverlayMode { HIDDEN, KEYBOARD, GAMEPAD }
+
+@Serializable
+data class GamepadButtonSpec(
+    val id: String,
+    val label: String,
+    val mappedKey: String,
+    val xRatio: Float,
+    val yRatio: Float,
+    val sizeDp: Float = 52f,
+    val visible: Boolean = true
+)
+
+@Serializable
+data class InputOverlayPreset(
+    val id: String = "default-joiplay",
+    val name: String = "Unified + JoiPlay Standard",
+    val skin: GamepadSkin = GamepadSkin.PLAYSTATION,
+    val opacity: Float = 0.88f,
+    val qwertyEnabled: Boolean = true,
+    val desktopKeys: List<String> = listOf(
+        "ESC", "TAB", "CTRL", "ALT", "SHIFT", "WIN",
+        "F1", "F2", "F3", "F4", "F5", "F11", "F12",
+        "DEL", "HOME", "END", "PGUP", "PGDN", "←", "↑", "↓", "→"
+    ),
+    val buttons: List<GamepadButtonSpec> = defaultJoiPlayButtons(GamepadSkin.PLAYSTATION)
+) {
+    companion object {
+        fun defaultJoiPlayButtons(skin: GamepadSkin): List<GamepadButtonSpec> {
+            val faceTop = if (skin == GamepadSkin.PLAYSTATION) "△" else "X"
+            val faceRight = if (skin == GamepadSkin.PLAYSTATION) "○" else "A"
+            val faceBottom = if (skin == GamepadSkin.PLAYSTATION) "×" else "B"
+            val faceLeft = if (skin == GamepadSkin.PLAYSTATION) "□" else "Y"
+            return listOf(
+                GamepadButtonSpec("l2", "L2", "Q", 0.08f, 0.16f, 52f, true),
+                GamepadButtonSpec("l1", "L1", "TAB", 0.17f, 0.16f, 52f, true),
+                GamepadButtonSpec("r1", "R1", "E", 0.83f, 0.16f, 52f, true),
+                GamepadButtonSpec("r2", "R2", "R", 0.92f, 0.16f, 52f, true),
+                GamepadButtonSpec("dpad", "D-PAD", "ARROWS", 0.15f, 0.56f, 118f, true),
+                GamepadButtonSpec("lstick", "L-STICK", "WASD", 0.28f, 0.78f, 84f, true),
+                GamepadButtonSpec("select", "SELECT", "TAB", 0.43f, 0.86f, 56f, true),
+                GamepadButtonSpec("start", "START", "ESC", 0.57f, 0.86f, 56f, true),
+                GamepadButtonSpec("rstick", "R-STICK", "MOUSE", 0.70f, 0.78f, 84f, true),
+                GamepadButtonSpec("btn-top", faceTop, "Z", 0.84f, 0.43f, 52f, true),
+                GamepadButtonSpec("btn-right", faceRight, "ENTER", 0.92f, 0.56f, 52f, true),
+                GamepadButtonSpec("btn-bottom", faceBottom, "SPACE", 0.84f, 0.69f, 52f, true),
+                GamepadButtonSpec("btn-left", faceLeft, "SHIFT", 0.76f, 0.56f, 52f, true)
+            )
+        }
+    }
+}
+
+@Serializable
 data class LegacyMemoryBudget(
     val isSubAndroid10: Boolean,
     val isLowRamMode: Boolean,
@@ -63,6 +125,7 @@ data class WindowsAppConfig(
     val dpi: Int = 120,
     val envVars: Map<String, String> = emptyMap(),
     val keyboardMode: String = "desktop",
+    val box64SafeMode: Boolean = false,
     val dependencies: List<String> = emptyList(),
     val sha256: String = ""
 )
@@ -133,9 +196,9 @@ class DeviceCapabilityAnalyzer(private val context: Context) {
             isSubAndroid10 = isSubAndroid10,
             isLowRamMode = isLowRam,
             maxVirtualResolution = if (isLowRam || isSubAndroid10) "960x540" else "1280x720",
-            box64Mmap32 = isLowRam || isSubAndroid10,
+            box64Mmap32 = true,
             box64BigBlock = if (isLowRam) 1 else 2,
-            enableEsync = !isSubAndroid10 && !isLowRam,
+            enableEsync = false,
             estimatedContainerCapMb = (totalRamMb * (if (isLowRam) 0.45 else 0.65)).toLong().coerceAtLeast(512L)
         )
 

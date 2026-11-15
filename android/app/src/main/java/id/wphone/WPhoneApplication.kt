@@ -21,10 +21,12 @@ object WPhoneNativeBridge {
 
     external fun xserverStart(socketPath: String, width: Int, height: Int): Boolean
     external fun xserverSetSurface(surface: Surface?)
+    external fun xserverResize(width: Int, height: Int)
     external fun xserverStop()
     external fun xserverInjectPointer(x: Int, y: Int, button: Int, action: Int, modifiers: Int)
     external fun xserverInjectKey(xKeycode: Int, isDown: Boolean, stateMask: Int)
     external fun xserverGetClientCount(): Int
+    external fun xserverGetFps(): Int
 }
 
 class WPhoneApplication : Application() {

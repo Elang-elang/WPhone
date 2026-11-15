@@ -20,6 +20,7 @@ import {
   Save,
   ShieldAlert,
   Sliders,
+  Terminal,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -30,6 +31,7 @@ import {
   ManagedProcess,
   PluginSandboxExecutionResult,
   ResolvedLanguage,
+  SystemTelemetry,
   VirtualFsNode,
   WPhoneSystemState,
 } from '../types/wphone';
@@ -57,6 +59,7 @@ interface AdminPanelProps {
 
 type AdminTab =
   | 'dashboard'
+  | 'cmd'
   | 'files'
   | 'apps'
   | 'runtime'
@@ -118,6 +121,55 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Logs Filter
   const [logFilter, setLogFilter] = useState<'ALL' | 'INFO' | 'WARN' | 'ERROR'>('ALL');
+
+  // Windows Task Manager Live Telemetry & Admin CMD Shell
+  const [telemetry, setTelemetry] = useState<SystemTelemetry | null>(null);
+  const [cmdInput, setCmdInput] = useState('ver');
+  const [cmdRunning, setCmdRunning] = useState(false);
+  const [cmdOutput, setCmdOutput] = useState(
+    'WPhone Windows / Distro Admin CMD Shell ready.\nType "help", "ver", "dir /WPhone/prefixes", "reg query pfx-notepadpp", or "logs".'
+  );
+
+  useEffect(() => {
+    let active = true;
+    const poll = () => {
+      fetch('/api/telemetry')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data: SystemTelemetry | null) => {
+          if (active && data) setTelemetry(data);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const id = window.setInterval(poll, 2000);
+    return () => {
+      active = false;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  const runAdminCmd = async (commandText: string) => {
+    const trimmed = commandText.trim();
+    if (!trimmed || cmdRunning) return;
+    if (trimmed.toLowerCase() === 'clear') {
+      setCmdOutput('');
+      return;
+    }
+    setCmdRunning(true);
+    try {
+      const res = await fetch('/api/cmd/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: trimmed }),
+      });
+      const data = (await res.json()) as { exitCode: number; output: string };
+      setCmdOutput((prev) => `${prev ? prev + '\n\n' : ''}$ ${trimmed}\n${data.output}\n[exit ${data.exitCode}]`);
+    } catch {
+      setCmdOutput((prev) => `${prev}\n[error] Failed to reach /api/cmd/exec`);
+    } finally {
+      setCmdRunning(false);
+    }
+  };
 
   const device = useMemo(
     () =>
@@ -294,6 +346,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         {(
           [
             { id: 'dashboard', label: t.tabs.dashboard },
+            { id: 'cmd', label: t.tabs.cmd },
             { id: 'files', label: t.tabs.files },
             { id: 'apps', label: t.tabs.apps },
             { id: 'runtime', label: t.tabs.runtime },
@@ -384,6 +437,49 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           </div>
 
           <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Windows Task Manager · Live Host & Container Resources
+              </h3>
+              <span className="font-mono text-[11px] text-slate-500 tabular-nums">
+                Uptime: {telemetry?.uptimeSec ?? 0}s · Workspace: {telemetry?.workspaceMb ?? 1} MB
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+              <div className="space-y-1.5">
+                <div className="flex justify-between font-mono tabular-nums">
+                  <span className="text-slate-600 dark:text-slate-300">CPU Utilization</span>
+                  <span className="font-bold text-[#0078D4] dark:text-sky-400">{telemetry?.cpuPercent ?? 0}%</span>
+                </div>
+                <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full bg-[#0078D4] dark:bg-sky-400 transition-all"
+                    style={{ width: `${telemetry?.cpuPercent ?? 0}%` }}
+                  />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex justify-between font-mono tabular-nums">
+                  <span className="text-slate-600 dark:text-slate-300">Memory Used</span>
+                  <span className="font-bold text-[#0078D4] dark:text-sky-400">
+                    {telemetry ? `${telemetry.ramUsedMb} / ${telemetry.ramTotalMb} MB` : 'Loading...'}
+                  </span>
+                </div>
+                <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-500 transition-all"
+                    style={{
+                      width: telemetry
+                        ? `${Math.min(100, Math.round((telemetry.ramUsedMb / Math.max(1, telemetry.ramTotalMb)) * 100))}%`
+                        : '0%',
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3">
             <h3 className="font-display text-sm font-semibold text-slate-900 dark:text-slate-100">
               {t.dashboard.runtimeStack}
             </h3>
@@ -406,6 +502,68 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* 1B. ADMIN CMD SHELL */}
+      {tab === 'cmd' && (
+        <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4 space-y-3 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 font-display text-sm font-bold text-slate-900 dark:text-white">
+              <Terminal className="w-4 h-4 text-[#0078D4] dark:text-sky-400" />
+              <span>WPhone Admin CMD Shell (Distro & Wine Prefix Inspector)</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                'ver',
+                'box64 --version',
+                'dir /WPhone/prefixes',
+                'reg query pfx-notepadpp',
+                'env',
+                'ps',
+                'logs',
+              ].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => {
+                    setCmdInput(preset);
+                    void runAdminCmd(preset);
+                  }}
+                  className="px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 font-mono text-[11px] hover:bg-slate-100 dark:hover:bg-slate-800"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void runAdminCmd(cmdInput);
+            }}
+            className="flex gap-2"
+          >
+            <input
+              type="text"
+              value={cmdInput}
+              onChange={(e) => setCmdInput(e.target.value)}
+              placeholder="help, ver, dir /WPhone/prefixes, reg query pfx-notepadpp, cat /WPhone/config/global_runtime.json"
+              className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 font-mono text-xs text-slate-900 dark:text-slate-100"
+            />
+            <button
+              type="submit"
+              disabled={cmdRunning}
+              className="px-4 py-2 rounded-lg bg-[#0078D4] hover:bg-[#006CBE] text-white font-semibold"
+            >
+              {cmdRunning ? '...' : 'Execute'}
+            </button>
+          </form>
+
+          <pre className="p-3.5 rounded-lg bg-[#050811] border border-slate-800 text-sky-300 font-mono text-[11px] leading-relaxed whitespace-pre-wrap max-h-80 overflow-y-auto">
+            {cmdOutput}
+          </pre>
         </div>
       )}
 

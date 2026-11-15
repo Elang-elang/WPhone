@@ -1,10 +1,8 @@
 import { ResolvedLanguage, VerificationStatus } from '../types/wphone';
 
 export const USER_ICONS = {
-  internalWindows:
-    'https://thumb.wikimedia.org/wikipedia/commons/thumb/4/48/Windows_logo_-_2012_%28dark_blue%29.svg/960px-Windows_logo_-_2012_%28dark_blue%29.svg.png?utm_source=id.wikibooks.org&utm_campaign=index&utm_content=thumbnail',
-  appLauncher:
-    'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcThOlhf5M74oNkWv3wCRkVuJ4CdYECYzDU2pnJVTFFVgA&s=10',
+  internalWindows: '/assets/wphone-windows.png',
+  appLauncher: '/assets/wphone-launcher.png',
 } as const;
 
 export const verificationLabel = (status: VerificationStatus, lang: ResolvedLanguage): string => {
@@ -181,6 +179,7 @@ export const translations = {
         plugins: 'Plugin Manager',
         config: 'Config Manager',
         logs: 'Logs & Diagnostics',
+        cmd: 'CMD Shell',
       },
       dashboard: {
         systemStatus: 'Status Sistem Terkelola',
@@ -410,6 +409,7 @@ export const translations = {
         plugins: 'Plugin Manager',
         config: 'Config Manager',
         logs: 'Logs & Diagnostics',
+        cmd: 'CMD Shell',
       },
       dashboard: {
         systemStatus: 'Managed System Status',
